@@ -3,8 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { signOut } from '@/lib/auth'
+import { getCurrentUser, isAuthenticated } from '@/lib/auth'
 
 export default function Navigation() {
   const pathname = usePathname()
@@ -12,17 +11,22 @@ export default function Navigation() {
   const [showUserMenu, setShowUserMenu] = useState(false)
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user)
-    })
+    // Check hardcoded authentication
+    if (isAuthenticated()) {
+      setUser(getCurrentUser())
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null)
+    // Listen for storage changes (e.g., logout from another tab)
+    const handleStorageChange = () => {
+      if (isAuthenticated()) {
+        setUser(getCurrentUser())
+      } else {
+        setUser(null)
       }
-    )
+    }
 
-    return () => subscription.unsubscribe()
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
   }, [])
 
   const handleSignOut = async () => {

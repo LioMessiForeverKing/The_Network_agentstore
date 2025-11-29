@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { isAuthenticated, getCurrentUser } from '@/lib/auth'
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
@@ -10,26 +10,25 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUser(session.user)
-      } else {
+    // Check hardcoded authentication
+    if (isAuthenticated()) {
+      setUser(getCurrentUser())
+    } else {
+      router.push('/login')
+    }
+    setLoading(false)
+
+    // Listen for storage changes (e.g., logout from another tab)
+    const handleStorageChange = () => {
+      if (!isAuthenticated()) {
         router.push('/login')
+      } else {
+        setUser(getCurrentUser())
       }
-      setLoading(false)
-    })
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (session?.user) {
-          setUser(session.user)
-        } else {
-          router.push('/login')
-        }
-      }
-    )
-
-    return () => subscription.unsubscribe()
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
   }, [router])
 
   if (loading) {

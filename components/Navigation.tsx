@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { getCurrentUser, isAuthenticated } from '@/lib/auth'
+import { getCurrentUser, isAuthenticated, signOut } from '@/lib/auth'
 
 export default function Navigation() {
   const pathname = usePathname()

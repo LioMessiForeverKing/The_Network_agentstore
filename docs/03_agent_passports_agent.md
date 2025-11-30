@@ -216,20 +216,20 @@ Performance data updated from `agent_usage_logs`:
 UPDATE agent_capabilities ac
 SET 
   success_rate = (
-    SELECT AVG(success_flag::int)
-    FROM agent_usage_logs
+      SELECT AVG(success_flag::int)
+      FROM agent_usage_logs
     WHERE agent_id = ac.agent_id
-    AND created_at > NOW() - INTERVAL '30 days'
-  ),
+      AND created_at > NOW() - INTERVAL '30 days'
+    ),
   average_latency_ms = (
-    SELECT AVG(latency_ms)
-    FROM agent_usage_logs
+      SELECT AVG(latency_ms)
+      FROM agent_usage_logs
     WHERE agent_id = ac.agent_id
-    AND created_at > NOW() - INTERVAL '30 days'
-  ),
+      AND created_at > NOW() - INTERVAL '30 days'
+    ),
   total_uses = (
-    SELECT COUNT(*)
-    FROM agent_usage_logs
+      SELECT COUNT(*)
+      FROM agent_usage_logs
     WHERE agent_id = ac.agent_id
   )
 WHERE ac.agent_id IS NOT NULL;

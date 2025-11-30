@@ -393,7 +393,7 @@ INSERT INTO public.agents (
     'INTERNAL_FUNCTION',
     '{
         "function_name": "prime-agent",
-        "endpoint": "/api/agents/prime/execute",
+        "endpoint": "/functions/v1/prime-agent",
         "method": "POST"
     }'::jsonb,
     'ACTIVE',

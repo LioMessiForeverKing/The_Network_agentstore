@@ -2,13 +2,14 @@ import { createClient } from '@/lib/supabase-server'
 import AuthGuard from '@/components/AuthGuard'
 import Button from '@/components/Button'
 import Badge from '@/components/Badge'
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
 async function getAgentBySlug(slug: string) {
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('agents')
-    .select('*, agent_passports(*)')
+    .select('*, agent_capabilities(*)')
     .eq('slug', slug)
     .eq('status', 'ACTIVE')
     .single()
@@ -31,8 +32,8 @@ export default async function AgentDetailPage({
     notFound()
   }
 
-  const passport = agent.agent_passports?.[0]
-  const successRate = passport ? Math.round(passport.success_rate * 100) : 0
+  const capabilities = agent.agent_capabilities?.[0]
+  const successRate = capabilities ? Math.round((capabilities.success_rate || 0) * 100) : 0
 
   return (
     <AuthGuard>
@@ -65,6 +66,20 @@ export default async function AgentDetailPage({
 
               {/* CTA Button */}
               <div className="animate-fade-in" style={{ animationDelay: '0.1s' }}>
+                {agent.slug === 'prime' ? (
+                  <Link href="/agents/prime/test">
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className="bg-white text-purple-600 hover:bg-gray-50 shadow-xl"
+                    >
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      Test Prime Agent
+                    </Button>
+                  </Link>
+                ) : (
                 <Button
                   variant="secondary"
                   size="lg"
@@ -75,6 +90,7 @@ export default async function AgentDetailPage({
                   </svg>
                   Try This Agent
                 </Button>
+                )}
               </div>
             </div>
           </div>
@@ -120,7 +136,7 @@ export default async function AgentDetailPage({
               </div>
 
               {/* Performance Stats Card */}
-              {passport && (
+              {capabilities && (
                 <div className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-lg animate-fade-in" style={{ animationDelay: '0.1s' }}>
                   <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-gray-900 dark:text-white">
                     <svg className="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -178,7 +194,7 @@ export default async function AgentDetailPage({
                           <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500/20 to-cyan-500/20 border-2 border-blue-200 dark:border-blue-800 flex items-center justify-center">
                             <div className="text-center">
                               <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">
-                                {Math.round(passport.average_latency_ms)}
+                                {Math.round(capabilities.average_latency_ms || 0)}
                               </div>
                               <div className="text-xs text-gray-600 dark:text-gray-400">ms</div>
                             </div>
@@ -195,7 +211,7 @@ export default async function AgentDetailPage({
                           <div className="w-24 h-24 rounded-full bg-gradient-to-br from-purple-500/20 to-pink-500/20 border-2 border-purple-200 dark:border-purple-800 flex items-center justify-center">
                             <div className="text-center">
                               <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                                {passport.total_uses.toLocaleString()}
+                                {(capabilities.total_uses || 0).toLocaleString()}
                               </div>
                             </div>
                           </div>

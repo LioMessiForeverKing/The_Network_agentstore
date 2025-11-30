@@ -9,7 +9,7 @@ interface AgentCardProps {
     description: string | null
     domain: string | null
     status: string
-    agent_passports?: Array<{
+    agent_capabilities?: Array<{
       success_rate: number
       average_latency_ms: number
       total_uses: number
@@ -18,8 +18,8 @@ interface AgentCardProps {
 }
 
 export default function AgentCard({ agent }: AgentCardProps) {
-  const passport = agent.agent_passports?.[0]
-  const successRate = passport ? Math.round(passport.success_rate * 100) : 0
+  const capabilities = agent.agent_capabilities?.[0]
+  const successRate = capabilities ? Math.round((capabilities.success_rate || 0) * 100) : 0
 
   return (
     <Link href={`/agents/${agent.slug}`} className="block group">
@@ -54,7 +54,7 @@ export default function AgentCard({ agent }: AgentCardProps) {
           </p>
 
           {/* Performance Stats */}
-          {passport && (
+          {capabilities && (
             <div className="space-y-3">
               {/* Success Rate Progress Bar */}
               <div>
@@ -78,13 +78,13 @@ export default function AgentCard({ agent }: AgentCardProps) {
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <span className="text-xs">{Math.round(passport.average_latency_ms)}ms</span>
+                  <span className="text-xs">{Math.round(capabilities.average_latency_ms || 0)}ms</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
-                  <span className="text-xs font-medium">{passport.total_uses.toLocaleString()} uses</span>
+                  <span className="text-xs font-medium">{(capabilities.total_uses || 0).toLocaleString()} uses</span>
                 </div>
               </div>
             </div>

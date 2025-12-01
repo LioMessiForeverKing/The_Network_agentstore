@@ -6,6 +6,7 @@ interface BadgeProps {
     size?: 'sm' | 'md'
     pulse?: boolean
     icon?: ReactNode
+    className?: string
 }
 
 export default function Badge({
@@ -13,7 +14,8 @@ export default function Badge({
     variant = 'default',
     size = 'md',
     pulse = false,
-    icon
+    icon,
+    className = ''
 }: BadgeProps) {
     const baseStyles = 'inline-flex items-center gap-1.5 rounded-full font-medium transition-all duration-200'
 
@@ -31,7 +33,7 @@ export default function Badge({
     }
 
     return (
-        <span className={`${baseStyles} ${variants[variant]} ${sizes[size]} ${pulse ? 'animate-pulse' : ''}`}>
+        <span className={`${baseStyles} ${variants[variant]} ${sizes[size]} ${pulse ? 'animate-pulse' : ''} ${className}`}>
             {icon && icon}
             {children}
         </span>

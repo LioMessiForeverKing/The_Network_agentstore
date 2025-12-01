@@ -287,6 +287,7 @@ async function findNetworkMatches(
 /**
  * Create invite records for matched users
  * IMPORTANT: Excludes the event host from being added to event_attendees
+ * Also creates messages for each invite so notifications are sent
  */
 async function createInvites(
   supabase: any,
@@ -299,10 +300,10 @@ async function createInvites(
       return 0;
     }
     
-    // Check current capacity and get event host
+    // Get full event details (needed for invite messages)
     const { data: event } = await supabase
       .from('user_weekly_activities')
-      .select('max_capacity, user_id')
+      .select('id, event_title, event_name, location, start_date, end_date, max_capacity, user_id, tags, activity_description')
       .eq('id', eventId)
       .single();
     
@@ -350,6 +351,15 @@ async function createInvites(
       return 0;
     }
     
+    // Get host's name for the invite messages
+    const { data: hostProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', actualHostId)
+      .maybeSingle();
+    
+    const hostName = hostProfile?.full_name || 'Someone';
+    
     // Create invites (host already excluded)
     const invites = nonHostMatches.slice(0, invitesToCreate).map(match => ({
       event_id: eventId,
@@ -357,6 +367,7 @@ async function createInvites(
       status: 'pending'
     }));
     
+    // Create event_attendees records
     const { error } = await supabase
       .from('event_attendees')
       .insert(invites);
@@ -366,6 +377,69 @@ async function createInvites(
       return 0;
     }
     
+    // Now create messages for each invite so notifications are sent
+    let messagesCreated = 0;
+    for (const match of nonHostMatches.slice(0, invitesToCreate)) {
+      try {
+        // Find or create conversation between host and invitee
+        const conversationId = await findOrCreateConversation(supabase, actualHostId, match.user_id);
+        
+        if (!conversationId) {
+          console.error(`Failed to create conversation for invite to ${match.name}`);
+          continue;
+        }
+        
+        // Check if an invite message was already sent (to prevent duplicate invites)
+        const { data: existingInvite } = await supabase
+          .from('messages')
+          .select('id')
+          .eq('conversation_id', conversationId)
+          .eq('sender_id', actualHostId)
+          .eq('metadata->>type', 'event_invitation')
+          .eq('metadata->>event_id', eventId)
+          .maybeSingle();
+        
+        if (existingInvite) {
+          console.log(`Invite message already sent to ${match.name} for event ${eventId}`);
+          continue;
+        }
+        
+        // Create message with invite card metadata
+        const { error: messageError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            sender_id: actualHostId,
+            content: `${hostName} invited you to "${event.event_title || event.event_name || 'an event'}"`,
+            metadata: {
+              type: 'event_invitation',
+              event_id: eventId,
+              event_title: event.event_title || event.event_name || 'Untitled Event',
+              event_location: event.location || null,
+              start_date: event.start_date || null,
+              end_date: event.end_date || null,
+              max_capacity: event.max_capacity || null,
+              tags: event.tags || [],
+              description: event.activity_description || null,
+              host_user_id: actualHostId,
+              host_name: hostName
+            }
+          });
+        
+        if (messageError) {
+          console.error(`Error creating invite message for ${match.name}:`, messageError);
+          continue;
+        }
+        
+        messagesCreated++;
+        console.log(`Invite message sent to ${match.name} for event ${eventId}`);
+      } catch (error) {
+        console.error(`Error sending invite message to ${match.name}:`, error);
+        // Continue with other invites even if one fails
+      }
+    }
+    
+    console.log(`Created ${invitesToCreate} invites, sent ${messagesCreated} invite messages`);
     return invitesToCreate;
   } catch (error) {
     console.error('Error in createInvites:', error);

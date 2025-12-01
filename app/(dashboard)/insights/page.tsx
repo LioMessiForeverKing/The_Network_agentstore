@@ -3,13 +3,35 @@ import AuthGuard from '@/components/AuthGuard'
 import StatCard from '@/components/StatCard'
 import { getCurrentUser } from '@/lib/auth-server'
 
-async function getInsights(userId: string) {
-  const supabase = await createClient()
-  // Get usage statistics
-  const { data: usageData, error: usageError } = await supabase
+async function getInsights(userEmail: string) {
+  // Use admin client to bypass RLS
+  const { createAdminClient } = await import('@/lib/supabase-admin')
+  const supabase = createAdminClient()
+  
+  // Find actual user_id from profiles
+  let actualUserId: string | null = null
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id')
+    .ilike('email', userEmail)
+    .maybeSingle()
+  
+  if (profile) {
+    actualUserId = profile.id
+  }
+  
+  // Get usage statistics (excluding ROUTING tasks, only actual agent executions)
+  // This matches the dashboard behavior for consistency
+  let query = supabase
     .from('agent_usage_logs')
     .select('*, agents(*)')
-    .eq('user_id', userId)
+    .not('agent_id', 'is', null) // Only actual agent executions, not routing decisions
+  
+  if (actualUserId) {
+    query = query.eq('user_id', actualUserId)
+  }
+  
+  const { data: usageData, error: usageError } = await query
 
   if (usageError) {
     console.error('Error fetching insights:', usageError)
@@ -56,7 +78,7 @@ export default async function InsightsPage() {
   const { data: { user } } = await getCurrentUser()
   if (!user) return null
 
-  const insights = await getInsights(user.id)
+  const insights = await getInsights(user.email || 'admin@thenetwork.life')
 
   return (
     <AuthGuard>

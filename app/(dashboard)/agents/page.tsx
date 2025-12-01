@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase-server'
+import { createAdminClient } from '@/lib/supabase-admin'
 import AuthGuard from '@/components/AuthGuard'
 import AgentCard from '@/components/AgentCard'
 import { getCurrentUser } from '@/lib/auth-server'
@@ -6,32 +7,107 @@ import { isAdminEmail } from '@/lib/admin-server'
 import Link from 'next/link'
 
 async function getAgents(isAdmin: boolean) {
-  const supabase = await createClient()
-  const { data, error } = await supabase
+  // Use admin client for queries that need to bypass RLS
+  const supabase = isAdmin ? createAdminClient() : await createClient()
+  
+  // Admins can see ACTIVE and EXPERIMENTAL agents, regular users only see ACTIVE
+  let query = supabase
     .from('agents')
     .select('*, agent_capabilities(*)')
-    .eq('status', 'ACTIVE')
-    .order('name')
+  
+  if (isAdmin) {
+    query = query.in('status', ['ACTIVE', 'EXPERIMENTAL'])
+  } else {
+    query = query.eq('status', 'ACTIVE')
+  }
+  
+  const { data: agents, error } = await query.order('name')
 
   if (error) {
     console.error('Error fetching agents:', error)
     return []
   }
-  return data || []
+
+  // Get usage stats from agent_usage_logs for each agent
+  // Use admin client to bypass RLS for usage logs
+  const adminSupabase = createAdminClient()
+  const agentsWithStats = await Promise.all((agents || []).map(async (agent) => {
+    // Query usage logs for this specific agent using admin client
+    const { data: usageLogs, error: logsError } = await adminSupabase
+      .from('agent_usage_logs')
+      .select('success_flag, latency_ms, user_id, task_type')
+      .eq('agent_id', agent.id)
+      .limit(10000) // Get more data for accurate stats
+
+    if (logsError) {
+      console.error(`Error fetching logs for agent ${agent.name} (${agent.id}):`, logsError)
+      console.error('Logs error details:', JSON.stringify(logsError, null, 2))
+    }
+
+    const logs = usageLogs || []
+    const totalUses = logs.length
+    const successfulUses = logs.filter(log => log.success_flag === true).length
+    const successRate = totalUses > 0 ? successfulUses / totalUses : 0
+    
+    const latencies = logs
+      .map(log => log.latency_ms)
+      .filter((latency: number | null) => latency != null && latency > 0) as number[]
+    const averageLatency = latencies.length > 0
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+      : 0
+
+    // Extract capabilities from passport_data if available
+    const capabilities = agent.agent_capabilities?.[0]
+    const passportData = capabilities?.passport_data || {}
+    const trustMetrics = passportData.trust_metrics || {}
+
+    console.log(`Agent ${agent.name}: ${totalUses} uses, ${successRate * 100}% success rate`)
+
+    return {
+      ...agent,
+      agent_capabilities: [{
+        success_rate: successRate,
+        average_latency_ms: averageLatency,
+        total_uses: totalUses,
+        // Also include passport_data for reference
+        passport_data: passportData
+      }]
+    }
+  }))
+
+  return agentsWithStats
 }
 
 async function getAllUsageStats() {
-  const supabase = await createClient()
+  // Use admin client to bypass RLS for usage stats
+  const supabase = createAdminClient()
   
-  // Get all usage logs (not filtered by user)
+  // Get all usage logs (excluding ROUTING tasks, only actual agent executions)
+  // First, let's check what we have
+  const { data: allLogs, error: allLogsError } = await supabase
+    .from('agent_usage_logs')
+    .select('id, agent_id, task_type, success_flag')
+    .limit(100)
+
+  if (allLogsError) {
+    console.error('Error fetching all logs:', allLogsError)
+  } else {
+    console.log(`Total logs found: ${allLogs?.length || 0}`)
+    console.log(`Logs with agent_id: ${allLogs?.filter(l => l.agent_id != null).length || 0}`)
+    console.log(`ROUTING logs: ${allLogs?.filter(l => l.task_type === 'ROUTING').length || 0}`)
+  }
+  
+  // Get all usage logs (excluding ROUTING tasks, only actual agent executions)
   const { data: usageData, error } = await supabase
     .from('agent_usage_logs')
     .select('*, agents(*)')
+    .not('agent_id', 'is', null) // Only actual agent executions, not routing decisions
     .order('created_at', { ascending: false })
-    .limit(1000) // Get recent usage
+    .limit(10000) // Get more usage data for accurate stats
 
   if (error) {
     console.error('Error fetching all usage:', error)
+    console.error('Error details:', JSON.stringify(error, null, 2))
     return {
       totalUses: 0,
       successRate: 0,
@@ -41,20 +117,22 @@ async function getAllUsageStats() {
     }
   }
 
+  console.log(`Fetched ${usageData?.length || 0} usage logs (excluding ROUTING)`)
+
   const logs = usageData || []
   const totalUses = logs.length
-  const successfulUses = logs.filter((log: any) => log.success_flag).length
+  const successfulUses = logs.filter((log: any) => log.success_flag === true).length
   const successRate = totalUses > 0 ? successfulUses / totalUses : 0
 
   const latencies = logs
     .map((log: any) => log.latency_ms)
-    .filter((latency: number) => latency != null)
+    .filter((latency: number | null) => latency != null && latency > 0) as number[]
   const averageLatency = latencies.length > 0
-    ? latencies.reduce((a: number, b: number) => a + b, 0) / latencies.length
+    ? Math.round(latencies.reduce((a: number, b: number) => a + b, 0) / latencies.length)
     : 0
 
   // Get unique users
-  const uniqueUserIds = new Set(logs.map((log: any) => log.user_id))
+  const uniqueUserIds = new Set(logs.map((log: any) => log.user_id).filter((id: string | null) => id != null))
   const uniqueUsers = uniqueUserIds.size
 
   // Get top agents by usage
@@ -65,7 +143,7 @@ async function getAllUsageStats() {
       agentUsage[agentName] = { count: 0, success: 0 }
     }
     agentUsage[agentName].count++
-    if (log.success_flag) {
+    if (log.success_flag === true) {
       agentUsage[agentName].success++
     }
   })
@@ -133,7 +211,7 @@ export default async function AgentsPage() {
                     </svg>
                   </div>
                   <div>
-                    <div className="text-2xl font-bold">{agents.length}</div>
+                    <div className="text-2xl font-bold">{agents.filter(a => a.status === 'ACTIVE').length}</div>
                     <div className="text-sm text-purple-100">Active Agents</div>
                   </div>
                 </div>

@@ -13,6 +13,11 @@ interface AgentCardProps {
       success_rate: number
       average_latency_ms: number
       total_uses: number
+      passport_data?: {
+        capabilities?: {
+          supported_task_types?: string[]
+        }
+      }
     }>
   }
 }
@@ -20,6 +25,9 @@ interface AgentCardProps {
 export default function AgentCard({ agent }: AgentCardProps) {
   const capabilities = agent.agent_capabilities?.[0]
   const successRate = capabilities ? Math.round((capabilities.success_rate || 0) * 100) : 0
+  
+  // Get task type from capabilities or fallback to domain
+  const taskType = capabilities?.passport_data?.capabilities?.supported_task_types?.[0] || agent.domain
 
   return (
     <Link href={`/agents/${agent.slug}`} className="block group">
@@ -35,11 +43,23 @@ export default function AgentCard({ agent }: AgentCardProps) {
               <h3 className="text-xl font-bold mb-2 text-gray-900 dark:text-white group-hover:text-transparent group-hover:bg-gradient-to-r group-hover:from-purple-600 group-hover:to-blue-600 group-hover:bg-clip-text transition-all duration-300">
                 {agent.name}
               </h3>
-              {agent.domain && (
-                <Badge variant="info" size="sm">
-                  {agent.domain}
-                </Badge>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                {taskType && (
+                  <Badge variant="info" size="sm">
+                    {taskType}
+                  </Badge>
+                )}
+                {agent.status === 'EXPERIMENTAL' && (
+                  <Badge variant="warning" size="sm" pulse>
+                    Experimental
+                  </Badge>
+                )}
+                {agent.status === 'DISABLED' && (
+                  <Badge variant="error" size="sm">
+                    Disabled
+                  </Badge>
+                )}
+              </div>
             </div>
 
             {/* Agent Icon/Avatar */}

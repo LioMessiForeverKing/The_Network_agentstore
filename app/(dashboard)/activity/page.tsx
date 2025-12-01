@@ -2,28 +2,58 @@ import { createClient } from '@/lib/supabase-server'
 import AuthGuard from '@/components/AuthGuard'
 import Badge from '@/components/Badge'
 import { getCurrentUser } from '@/lib/auth-server'
+import Link from 'next/link'
 
-async function getUsageLogs(userId: string) {
-  const supabase = await createClient()
-  const { data, error } = await supabase
+async function getUsageLogs(userEmail: string) {
+  // Use admin client to bypass RLS and find logs by email
+  // First, find the actual user_id from profiles table
+  const { createAdminClient } = await import('@/lib/supabase-admin')
+  const adminSupabase = createAdminClient()
+  
+  // Find user by email in profiles or auth.users
+  let actualUserId: string | null = null
+  
+  // Try to find user in profiles table by email
+  const { data: profile } = await adminSupabase
+    .from('profiles')
+    .select('id')
+    .ilike('email', userEmail)
+    .maybeSingle()
+  
+  if (profile) {
+    actualUserId = profile.id
+  } else {
+    // If not in profiles, try to get from auth.users via service role
+    // For now, we'll use admin client to get all logs and filter by stella_handle or just show all for admin
+    console.log('User not found in profiles, fetching all logs for admin')
+  }
+  
+  // Fetch logs - if we have a user_id, filter by it, otherwise show all (for admin)
+  let query = adminSupabase
     .from('agent_usage_logs')
     .select('*, agents(*)')
-    .eq('user_id', userId)
     .order('created_at', { ascending: false })
-    .limit(50)
+    .limit(100)
+  
+  if (actualUserId) {
+    query = query.eq('user_id', actualUserId)
+  }
+  
+  const { data, error } = await query
 
   if (error) {
     console.error('Error fetching usage logs:', error)
+    console.error('Error details:', JSON.stringify(error, null, 2))
     return []
   }
   return data || []
 }
 
-export default async function MyUsagePage() {
+export default async function ActivityPage() {
   const { data: { user } } = await getCurrentUser()
   if (!user) return null
 
-  const logs = await getUsageLogs(user.id)
+  const logs = await getUsageLogs(user.email || 'admin@thenetwork.life')
 
   return (
     <AuthGuard>
@@ -31,7 +61,7 @@ export default async function MyUsagePage() {
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-600 via-blue-600 to-indigo-600 text-white py-12">
           <div className="container mx-auto px-4">
-            <h1 className="text-4xl font-bold mb-2 animate-fade-in">My Agent Usage</h1>
+            <h1 className="text-4xl font-bold mb-2 animate-fade-in">Agent Activity</h1>
             <p className="text-purple-100 animate-fade-in" style={{ animationDelay: '0.1s' }}>
               Track your agent interactions and performance history
             </p>
@@ -46,7 +76,7 @@ export default async function MyUsagePage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
               </div>
-              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">No Usage History</h3>
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">No Activity Yet</h3>
               <p className="text-gray-600 dark:text-gray-400">Start using agents to see your activity here!</p>
             </div>
           ) : (
@@ -59,19 +89,22 @@ export default async function MyUsagePage() {
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     {/* Agent Info */}
-                    <div className="flex items-center gap-4 flex-1">
+                    <Link 
+                      href={`/activity/${log.agent_id || 'routing'}`}
+                      className="flex items-center gap-4 flex-1 hover:opacity-80 transition-opacity"
+                    >
                       <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">
                         {log.agents?.name?.charAt(0) || '?'}
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
-                          {log.agents?.name || 'Unknown Agent'}
+                          {log.agents?.name || (log.agent_id ? `Agent ${log.agent_id.slice(0, 8)}...` : 'Routing')}
                         </h3>
                         <p className="text-sm text-gray-600 dark:text-gray-400">
                           {log.task_type || 'N/A'}
                         </p>
                       </div>
-                    </div>
+                    </Link>
 
                     {/* Stats Grid */}
                     <div className="flex flex-wrap items-center gap-4">

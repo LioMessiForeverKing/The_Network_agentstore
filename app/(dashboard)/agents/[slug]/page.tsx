@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase-server'
 import AuthGuard from '@/components/AuthGuard'
 import Button from '@/components/Button'
 import Badge from '@/components/Badge'
+import AgentWorkflow from '@/components/AgentWorkflow'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
@@ -11,7 +12,7 @@ async function getAgentBySlug(slug: string) {
     .from('agents')
     .select('*, agent_capabilities(*)')
     .eq('slug', slug)
-    .eq('status', 'ACTIVE')
+    .in('status', ['ACTIVE', 'EXPERIMENTAL']) // Allow both ACTIVE and EXPERIMENTAL
     .single()
 
   if (error || !data) {
@@ -222,6 +223,11 @@ export default async function AgentDetailPage({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Agent Workflow */}
+            <div className="mt-8">
+              <AgentWorkflow agentName={agent.name} agentSlug={agent.slug} />
             </div>
           </div>
         </div>

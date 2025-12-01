@@ -11,6 +11,78 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 /**
+ * Generate a creative event name using AI
+ */
+async function generateEventName(
+  themes: string[],
+  location: string,
+  description: string
+): Promise<string> {
+  try {
+    const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+    if (!OPENAI_API_KEY) {
+      // Fallback if no API key
+      return themes.length > 0 
+        ? `${themes.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(' & ')} Meetup`
+        : 'Networking Event';
+    }
+
+    const themeStr = themes.length > 0 ? themes.join(', ') : 'general networking';
+    const locationStr = location ? ` in ${location}` : '';
+    const descStr = description ? `: ${description}` : '';
+    
+    const prompt = `Generate a creative, engaging event name (max 50 characters) for a ${themeStr} event${locationStr}${descStr}. 
+Make it catchy and memorable. Just return the name, nothing else.`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a creative event naming assistant. Generate short, catchy event names.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 50,
+        temperature: 0.8
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const generatedName = data.choices?.[0]?.message?.content?.trim();
+    
+    if (generatedName) {
+      // Remove quotes if present
+      return generatedName.replace(/^["']|["']$/g, '');
+    }
+    
+    // Fallback
+    return themes.length > 0 
+      ? `${themes.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(' & ')} Meetup`
+      : 'Networking Event';
+  } catch (error) {
+    console.error('Error generating event name:', error);
+    // Fallback
+    return themes.length > 0 
+      ? `${themes.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(' & ')} Meetup`
+      : 'Networking Event';
+  }
+}
+
+/**
  * Get week start (Monday) for a given date
  */
 function getWeekStart(date: Date): string {
@@ -53,9 +125,15 @@ async function createEvent(
     
     const weekStart = getWeekStart(startDate);
     
-    // Generate event title if not provided
-    const eventTitle = event_details.title || 
-      `${event_details.theme?.join(' & ') || 'Networking'} Event`;
+    // Generate event title if not provided - use AI for better names
+    let eventTitle = event_details.title;
+    if (!eventTitle) {
+      eventTitle = await generateEventName(
+        event_details.theme || [],
+        event_details.location || '',
+        event_details.description || ''
+      );
+    }
     
     const eventName = event_details.description || eventTitle;
     
@@ -159,10 +237,11 @@ async function findNetworkMatches(
     const maxResults = invite_criteria?.max_results || event_details.max_attendees || 10;
     
     // Build query
+    // IMPORTANT: Always exclude the event host from matches
     let query = supabase
       .from('profiles')
       .select('id, full_name, location, interests')
-      .neq('id', taskSpec.user_id); // Exclude event host
+      .neq('id', taskSpec.user_id); // Exclude event host - they can't invite themselves
     
     // Filter by location if provided
     if (location) {
@@ -234,12 +313,26 @@ async function createInvites(
     // Get the actual host user_id from the event (in case it differs from parameter)
     const actualHostId = event.user_id || hostUserId;
     
-    // Filter out the host from matches - host should NEVER be in event_attendees
-    const nonHostMatches = matches.filter(match => match.user_id !== actualHostId);
+    // CRITICAL: Filter out the host from matches - host should NEVER be in event_attendees
+    // The host is already the event creator, they don't need an invite!
+    const nonHostMatches = matches.filter(match => {
+      const isHost = match.user_id === actualHostId;
+      if (isHost) {
+        console.warn(`[SECURITY] Attempted to invite host (${actualHostId}) to their own event - blocked`);
+      }
+      return !isHost;
+    });
     
     if (nonHostMatches.length === 0) {
-      console.log('All matches were the host - no invites to create');
+      console.log('All matches were the host - no invites to create (this is expected)');
       return 0;
+    }
+    
+    // Double-check: Ensure no host slipped through
+    const stillHasHost = nonHostMatches.some(match => match.user_id === actualHostId);
+    if (stillHasHost) {
+      console.error('[SECURITY ERROR] Host still in matches after filtering! Removing...');
+      nonHostMatches.filter(match => match.user_id !== actualHostId);
     }
     
     // Check current attendee count (excluding host)
@@ -357,7 +450,162 @@ async function findUserByName(
 }
 
 /**
- * Invite specific person to event
+ * Find or create a conversation between two users
+ */
+async function findOrCreateConversation(
+  supabase: any,
+  userId1: string,
+  userId2: string
+): Promise<string | null> {
+  try {
+    // First, try to find existing conversation
+    const { data: existingConvs } = await supabase
+      .from('conversation_participants')
+      .select('conversation_id')
+      .eq('user_id', userId1);
+    
+    if (existingConvs && existingConvs.length > 0) {
+      const convIds = existingConvs.map((c: any) => c.conversation_id);
+      
+      // Check if any of these conversations also have userId2
+      const { data: sharedConvs } = await supabase
+        .from('conversation_participants')
+        .select('conversation_id')
+        .in('conversation_id', convIds)
+        .eq('user_id', userId2)
+        .limit(1);
+      
+      if (sharedConvs && sharedConvs.length > 0) {
+        return sharedConvs[0].conversation_id;
+      }
+    }
+    
+    // No existing conversation, create one
+    const { data: newConv, error: convError } = await supabase
+      .from('conversations')
+      .insert({})
+      .select('id')
+      .single();
+    
+    if (convError || !newConv) {
+      console.error('Error creating conversation:', convError);
+      return null;
+    }
+    
+    // Add both participants
+    const { error: participantsError } = await supabase
+      .from('conversation_participants')
+      .insert([
+        { conversation_id: newConv.id, user_id: userId1 },
+        { conversation_id: newConv.id, user_id: userId2 }
+      ]);
+    
+    if (participantsError) {
+      console.error('Error adding participants:', participantsError);
+      return null;
+    }
+    
+    return newConv.id;
+  } catch (error) {
+    console.error('Error in findOrCreateConversation:', error);
+    return null;
+  }
+}
+
+/**
+ * Parse multiple names from a string, handling various separators
+ * Handles: "tristan and dhruv", "tristan & dhruv", "tristan, dhruv", "tristan, dhruv, and john", etc.
+ */
+function parseMultipleNames(nameString: string): string[] {
+  if (!nameString || typeof nameString !== 'string') {
+    return [];
+  }
+  
+  // Normalize the string: remove extra whitespace, handle common patterns
+  let normalized = nameString.trim();
+  
+  // Common words to filter out (not valid names)
+  const invalidWords = new Set(['and', 'the', 'a', 'an', 'or', 'but', 'to', 'from', 'with']);
+  
+  // Handle "and" as separator (case-insensitive)
+  // Split on " and ", " & ", ", and ", ", & ", or just ","
+  // Use regex to handle various patterns
+  const separators = [
+    /\s+and\s+/i,      // "tristan and dhruv"
+    /\s+&\s+/,         // "tristan & dhruv"
+    /,\s*and\s+/i,     // "tristan, and dhruv"
+    /,\s*&\s+/,        // "tristan, & dhruv"
+    /,\s+/,            // "tristan, dhruv"
+  ];
+  
+  let names: string[] = [normalized];
+  
+  // Try each separator pattern
+  for (const separator of separators) {
+    const split = names.flatMap(name => name.split(separator));
+    if (split.length > names.length) {
+      names = split;
+      break; // Use the first separator that produces multiple names
+    }
+  }
+  
+  // Clean up each name: trim, remove empty strings, filter invalid words, capitalize properly
+  names = names
+    .map(name => name.trim())
+    .filter(name => name.length > 0)
+    .map(name => {
+      // Split into words and filter out invalid words
+      const words = name.split(/\s+/)
+        .filter(word => word.length > 0 && !invalidWords.has(word.toLowerCase()));
+      
+      if (words.length === 0) {
+        return null; // All words were invalid
+      }
+      
+      // Capitalize first letter of each word
+      return words
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    })
+    .filter((name): name is string => name !== null && name.length > 0);
+  
+  // Remove duplicates
+  return [...new Set(names)];
+}
+
+/**
+ * Invite multiple people to event
+ */
+async function inviteMultiplePeopleToEvent(
+  supabase: any,
+  eventId: string,
+  nameString: string,
+  hostUserId: string
+): Promise<{ success: boolean; invited: Array<{ user_id: string; name: string }>; errors: string[] }> {
+  const names = parseMultipleNames(nameString);
+  const invited: Array<{ user_id: string; name: string }> = [];
+  const errors: string[] = [];
+  
+  // Invite each person
+  for (const name of names) {
+    const result = await invitePersonToEvent(supabase, eventId, name, hostUserId);
+    if (result.success && result.invited) {
+      invited.push(result.invited);
+    } else {
+      errors.push(result.error || `Failed to invite ${name}`);
+    }
+  }
+  
+  return {
+    success: invited.length > 0,
+    invited,
+    errors
+  };
+}
+
+/**
+ * Invite specific person to event by sending an invite card message
+ * The invitee will only be added to event_attendees when they accept the invite
  */
 async function invitePersonToEvent(
   supabase: any,
@@ -376,29 +624,56 @@ async function invitePersonToEvent(
       };
     }
     
-    // Check if already invited
-    const { data: existing } = await supabase
+    // Check if already invited (check both event_attendees and pending invite messages)
+    const { data: existingAttendee } = await supabase
       .from('event_attendees')
       .select('id')
       .eq('event_id', eventId)
       .eq('user_id', user.user_id)
       .maybeSingle();
     
-    if (existing) {
+    if (existingAttendee) {
       return {
         success: false,
         error: `${user.name} is already invited to this event.`
       };
     }
     
-    // Check capacity
-    const { data: event } = await supabase
+    // Find or create conversation between host and invitee (we'll use this for both checking and sending)
+    const conversationId = await findOrCreateConversation(supabase, hostUserId, user.user_id);
+    
+    if (!conversationId) {
+      return {
+        success: false,
+        error: 'Failed to create conversation for invite'
+      };
+    }
+    
+    // Check if an invite message was already sent (to prevent duplicate invites)
+    const { data: existingInvite } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('sender_id', hostUserId)
+      .eq('metadata->>type', 'event_invitation')
+      .eq('metadata->>event_id', eventId)
+      .maybeSingle();
+    
+    if (existingInvite) {
+      return {
+        success: false,
+        error: `You've already sent an invite to ${user.name} for this event.`
+      };
+    }
+    
+    // Get full event details for the invite card
+    const { data: event, error: eventError } = await supabase
       .from('user_weekly_activities')
-      .select('max_capacity, user_id')
+      .select('id, event_title, event_name, location, start_date, end_date, max_capacity, user_id, tags, activity_description')
       .eq('id', eventId)
       .single();
     
-    if (!event) {
+    if (eventError || !event) {
       return {
         success: false,
         error: 'Event not found'
@@ -428,26 +703,54 @@ async function invitePersonToEvent(
       };
     }
     
-    // Create invite
-    const { error: inviteError } = await supabase
-      .from('event_attendees')
+    // Get host's name for the message
+    const { data: hostProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', hostUserId)
+      .maybeSingle();
+    
+    const hostName = hostProfile?.full_name || 'Someone';
+    
+    // Create message with invite card metadata
+    // The message content will be shown as a fallback, but the UI will render the invite card
+    const { error: messageError } = await supabase
+      .from('messages')
       .insert({
-        event_id: eventId,
-        user_id: user.user_id,
-        status: 'pending'
+        conversation_id: conversationId,
+        sender_id: hostUserId,
+        content: `${hostName} invited you to "${event.event_title || event.event_name || 'an event'}"`,
+        metadata: {
+          type: 'event_invitation',
+          event_id: eventId,
+          event_title: event.event_title || event.event_name || 'Untitled Event',
+          event_location: event.location || null,
+          start_date: event.start_date || null,
+          end_date: event.end_date || null,
+          max_capacity: event.max_capacity || null,
+          tags: event.tags || [],
+          description: event.activity_description || null,
+          host_user_id: hostUserId,
+          host_name: hostName
+        }
       });
     
-    if (inviteError) {
-      console.error('Error creating invite:', inviteError);
+    if (messageError) {
+      console.error('Error creating invite message:', messageError);
       return {
         success: false,
-        error: 'Failed to create invite'
+        error: 'Failed to send invite message'
       };
     }
     
+    console.log(`Invite card message sent to ${user.name} for event ${eventId}`);
+    
     return {
       success: true,
-      invited: user
+      invited: {
+        user_id: user.user_id,
+        name: user.name
+      }
     };
   } catch (error: any) {
     console.error('Error in invitePersonToEvent:', error);
@@ -640,7 +943,7 @@ async function executePrime(
     
     // Handle different actions
     if (action === 'invite' && taskSpec.context?.invite_person) {
-      // Invite specific person to event
+      // Invite specific person(s) to event - handles multiple names
       const { event_id, invite_person } = taskSpec.context;
       
       if (!event_id) {
@@ -657,23 +960,64 @@ async function executePrime(
         };
       }
       
-      taskSteps.push('inviting_person');
-      const inviteResult = await invitePersonToEvent(
-        supabase,
-        event_id,
-        invite_person,
-        taskSpec.user_id
-      );
+      // Parse multiple names from the invite_person string
+      const names = parseMultipleNames(invite_person);
       
-      const latencyMs = Date.now() - startTime;
-      const result = {
-        success: inviteResult.success,
-        invite: inviteResult.invited || null,
-        error: inviteResult.error || null
-      };
+      if (names.length === 0) {
+        return {
+          success: false,
+          error: 'Could not parse any names from the invite request'
+        };
+      }
       
-      await logExecution(supabase, taskSpec, result, latencyMs, agentId, taskSteps);
-      return result;
+      taskSteps.push(`inviting_${names.length}_person${names.length > 1 ? 's' : ''}`);
+      
+      // If multiple names, use the multi-invite function
+      if (names.length > 1) {
+        const inviteResult = await inviteMultiplePeopleToEvent(
+          supabase,
+          event_id,
+          invite_person,
+          taskSpec.user_id
+        );
+        
+        const latencyMs = Date.now() - startTime;
+        const result = {
+          success: inviteResult.success,
+          invites: {
+            sent: inviteResult.invited.length,
+            total: names.length,
+            invited: inviteResult.invited,
+            errors: inviteResult.errors
+          },
+          error: inviteResult.errors.length > 0 && inviteResult.invited.length === 0
+            ? inviteResult.errors.join('; ')
+            : inviteResult.errors.length > 0
+            ? `Some invites failed: ${inviteResult.errors.join('; ')}`
+            : null
+        };
+        
+        await logExecution(supabase, taskSpec, result, latencyMs, agentId, taskSteps);
+        return result;
+      } else {
+        // Single person invite
+        const inviteResult = await invitePersonToEvent(
+          supabase,
+          event_id,
+          names[0],
+          taskSpec.user_id
+        );
+        
+        const latencyMs = Date.now() - startTime;
+        const result = {
+          success: inviteResult.success,
+          invite: inviteResult.invited || null,
+          error: inviteResult.error || null
+        };
+        
+        await logExecution(supabase, taskSpec, result, latencyMs, agentId, taskSteps);
+        return result;
+      }
     }
     
     if (action === 'edit' && taskSpec.context?.event_id) {
@@ -728,12 +1072,17 @@ async function executePrime(
     }
     
     // Step 2: Find network matches (if auto_invite enabled)
+    // IMPORTANT: Never add the host to attendees - they're already the host!
     let matches: Array<{ user_id: string; name: string; compatibility_score?: number }> = [];
     let invitesSent = 0;
     
     if (taskSpec.context.auto_invite || taskSpec.context.invite_criteria) {
       taskSteps.push('finding_network_matches');
       matches = await findNetworkMatches(supabase, taskSpec, event.id);
+      
+      // Double-check: Remove host from matches if somehow included
+      matches = matches.filter(match => match.user_id !== taskSpec.user_id);
+      
       taskSteps.push(`found_${matches.length}_matches`);
       
       if (matches.length > 0) {
@@ -843,15 +1192,50 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const taskSpec = body.task_spec || body;
 
-    // Validate required fields
-    if (!taskSpec.type || !taskSpec.context?.event_details) {
+    // Validate required fields based on action type
+    if (!taskSpec.type) {
       return new Response(
-        JSON.stringify({ error: 'Invalid task spec: type and event_details are required' }),
+        JSON.stringify({ error: 'Invalid task spec: type is required' }),
         { 
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         }
       );
+    }
+
+    // For invite/edit actions, we need event_id, not event_details
+    const action = taskSpec.context?.action || 'create';
+    if (action === 'invite') {
+      if (!taskSpec.context?.event_id || !taskSpec.context?.invite_person) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid task spec: event_id and invite_person are required for invite action' }),
+          { 
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    } else if (action === 'edit') {
+      if (!taskSpec.context?.event_id) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid task spec: event_id is required for edit action' }),
+          { 
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    } else {
+      // For create action, we need event_details
+      if (!taskSpec.context?.event_details) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid task spec: event_details are required for create action' }),
+          { 
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
     }
 
     // Set user_id if not provided (use authenticated user)

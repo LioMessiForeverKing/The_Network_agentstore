@@ -3,6 +3,7 @@ import AuthGuard from '@/components/AuthGuard'
 import Badge from '@/components/Badge'
 import { getCurrentUser } from '@/lib/auth-server'
 import Link from 'next/link'
+import ErrorDiagnostics from '@/components/ErrorDiagnostics'
 
 async function getUsageLogs(userEmail: string) {
   // Use admin client to bypass RLS and find logs by email
@@ -145,6 +146,11 @@ export default async function ActivityPage() {
                       </Badge>
                     </div>
                   </div>
+
+                  {/* Error Diagnostics - Only show for failed logs */}
+                  {!log.success_flag && (
+                    <ErrorDiagnostics log={log} />
+                  )}
                 </div>
               ))}
             </div>

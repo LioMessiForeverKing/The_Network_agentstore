@@ -108,16 +108,32 @@ async function createEvent(
     const dateStr = event_details.date;
     const timeStr = event_details.time || '19:00';
     
+    if (!dateStr) {
+      throw new Error('Event date is required');
+    }
+    
     // Combine date and time into ISO8601
     let startDate: Date;
     if (dateStr.includes('T')) {
       // Already ISO8601
       startDate = new Date(dateStr);
     } else {
-      // Date only, add time
+      // Date only (YYYY-MM-DD format), add time
       const [hours, minutes] = timeStr.split(':').map(Number);
-      startDate = new Date(dateStr);
-      startDate.setHours(hours || 19, minutes || 0, 0, 0);
+      startDate = new Date(dateStr + 'T00:00:00Z'); // Parse as UTC first
+      
+      // Validate the date
+      if (isNaN(startDate.getTime())) {
+        throw new Error(`Invalid date format: ${dateStr}. Expected YYYY-MM-DD format.`);
+      }
+      
+      // Set time in local timezone (or UTC if timezone not specified)
+      startDate.setUTCHours(hours || 19, minutes || 0, 0, 0);
+    }
+    
+    // Validate the final date
+    if (isNaN(startDate.getTime())) {
+      throw new Error(`Invalid date: ${dateStr}`);
     }
     
     const endDate = new Date(startDate);
@@ -194,8 +210,24 @@ async function createEvent(
       }, null, 2));
       console.error('=== END ERROR ===');
       
+      // Create user-friendly error message
+      let userFriendlyError = 'Failed to create event';
+      
+      // Handle specific database error codes
+      if (error.code === '23505') { // Unique constraint violation
+        userFriendlyError = 'An event with these details already exists';
+      } else if (error.code === '23503') { // Foreign key violation
+        userFriendlyError = 'Invalid user or reference data';
+      } else if (error.code === '23502') { // Not null violation
+        userFriendlyError = `Missing required field: ${error.hint || 'unknown field'}`;
+      } else if (error.hint) {
+        userFriendlyError = error.hint;
+      } else if (error.message) {
+        userFriendlyError = error.message;
+      }
+      
       // Return error details in a way that can be logged
-      throw new Error(`Database error: ${error.code} - ${error.message}${error.hint ? ` (${error.hint})` : ''}`);
+      throw new Error(userFriendlyError);
     }
     
     console.log('Event created successfully:', event.id);

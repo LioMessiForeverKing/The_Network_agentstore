@@ -148,8 +148,20 @@ function extractEventDetailsFromText(text: string): {
 function parseDateFromMatch(match: RegExpMatchArray, text: string): string {
   const today = new Date();
   const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  const dayIndex = dayNames.findIndex(day => match[0].toLowerCase().includes(day));
   
+  // Check for "today" first (before other day checks)
+  if (match[0].toLowerCase().includes('today')) {
+    return today.toISOString().split('T')[0];
+  }
+  
+  // Check for "tomorrow"
+  if (match[0].toLowerCase().includes('tomorrow')) {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  }
+  
+  const dayIndex = dayNames.findIndex(day => match[0].toLowerCase().includes(day));
   if (dayIndex !== -1) {
     const currentDay = today.getDay();
     let daysUntil = dayIndex - currentDay;
@@ -158,12 +170,6 @@ function parseDateFromMatch(match: RegExpMatchArray, text: string): string {
     const targetDate = new Date(today);
     targetDate.setDate(today.getDate() + daysUntil);
     return targetDate.toISOString().split('T')[0];
-  }
-
-  if (match[0].toLowerCase().includes('tomorrow')) {
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0];
   }
 
   if (text.includes('next friday')) {

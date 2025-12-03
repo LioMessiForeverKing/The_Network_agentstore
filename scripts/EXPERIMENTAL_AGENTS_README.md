@@ -138,3 +138,4 @@ DELETE FROM agents WHERE status = 'EXPERIMENTAL';
 - Verify the function is deployed correctly
 - Check CORS headers if calling from browser
 
+

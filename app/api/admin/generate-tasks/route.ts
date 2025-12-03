@@ -156,7 +156,7 @@ export async function POST(request: Request) {
         const tasksToInsert = generatedTasks.map(task => {
             // Use STANDARD TASK SPEC FORMAT (Stella's format)
             // Gaia will transform this to agent-specific format based on agent passport
-            const naturalLanguageMessage = task.natural_language_message || task.description || ''
+            const naturalLanguageMessage = (task as any).natural_language_message || task.description || ''
             
             // Standard task spec format
             const standardTaskSpec = {

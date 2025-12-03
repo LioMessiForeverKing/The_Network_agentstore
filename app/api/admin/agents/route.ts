@@ -8,7 +8,7 @@ import { join } from 'path'
 export async function GET() {
   try {
     const { data: { user } } = await getCurrentUser()
-    
+
     if (!isAdminEmail(user?.email)) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -41,7 +41,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const { data: { user } } = await getCurrentUser()
-    
+
     if (!isAdminEmail(user?.email)) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -57,7 +57,17 @@ export async function POST(request: Request) {
       domain,
       invocation_type,
       invocation_config,
-      create_edge_function = true // Default to true for INTERNAL_FUNCTION
+      create_edge_function = true, // Default to true for INTERNAL_FUNCTION
+      code, // Custom code from the frontend
+      // New passport fields
+      type = 'tool',
+      capabilities = [],
+      supported_task_types = [],
+      input_schema = {},
+      output_schema = {},
+      risk_level = 'low',
+      cost_level = 'cheap',
+      latency_target_ms = 500
     } = body
 
     if (!name || !slug || !invocation_type) {
@@ -68,7 +78,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = createAdminClient()
-    
+
     // Check if slug already exists
     const { data: existing } = await supabase
       .from('agents')
@@ -113,9 +123,16 @@ export async function POST(request: Request) {
         agent_id: agent.id,
         supported_task_types: supportedTaskTypes,
         passport_data: {
+          type,
           capabilities: {
-            supported_task_types: supportedTaskTypes
+            supported_task_types: supportedTaskTypes.length > 0 ? supportedTaskTypes : supported_task_types,
+            ...capabilities
           },
+          input_schema,
+          output_schema,
+          risk_level,
+          cost_level,
+          latency_target_ms,
           constraints: {},
           required_trust_threshold: 0.5
         },
@@ -132,7 +149,7 @@ export async function POST(request: Request) {
     if (invocation_type === 'INTERNAL_FUNCTION' && create_edge_function && invocation_config?.function_name) {
       try {
         const functionName = invocation_config.function_name
-        
+
         // Validate function name
         if (!/^[a-z0-9-]+$/.test(functionName)) {
           edgeFunctionError = 'Function name must be lowercase alphanumeric with hyphens only'
@@ -140,16 +157,16 @@ export async function POST(request: Request) {
           // Create function directory and file
           const functionDir = join(process.cwd(), 'supabase', 'functions', functionName)
           const functionFile = join(functionDir, 'index.ts')
-          
+
           // Create directory if it doesn't exist
           await fs.mkdir(functionDir, { recursive: true })
-          
-          // Generate function code
-          const functionCode = generateEdgeFunctionCode(name, functionName, domain)
-          
+
+          // Generate function code or use provided code
+          const functionCode = code || generateEdgeFunctionCode(name, functionName, domain)
+
           // Write the function file
           await fs.writeFile(functionFile, functionCode, 'utf-8')
-          
+
           edgeFunctionCreated = true
           edgeFunctionPath = `supabase/functions/${functionName}/index.ts`
         }
@@ -183,7 +200,7 @@ export async function POST(request: Request) {
 
 function generateEdgeFunctionCode(agentName: string, functionName: string, domain: string | null): string {
   const taskType = domain ? domain.toUpperCase() : 'TASK'
-  
+
   return `// Supabase Edge Function: ${functionName}
 // Agent: ${agentName}
 // Task Type: ${taskType}

@@ -28,8 +28,10 @@ export async function POST(request: Request) {
 
         const generatedTasks = []
 
-        // 2. Generate tasks for each agent
+        // 2. Generate tasks for each agent (skip validator agent)
         for (const agent of agents || []) {
+            if (agent.slug === 'validator') continue; // Skip validator agent
+            
             const capabilities = agent.agent_capabilities?.[0]?.passport_data || {}
             const domain = agent.domain || 'general'
             const tasks = generateTasksForAgent(agent, domain, capabilities)
@@ -37,23 +39,34 @@ export async function POST(request: Request) {
             generatedTasks.push(...tasks)
         }
 
-        // 3. Store tasks (if tasks table exists, otherwise just log/return for now)
-        // For this MVP, we'll simulate the routing by creating entries in agent_usage_logs directly
-        // or by calling the routing function if available.
-        // Since we want to "Run routing on them to populate logs", we should probably call the router.
-        // However, calling the router for 100s of tasks might be slow.
-        // Let's just return the generated tasks for now and maybe insert them into a 'synthetic_tasks' table if we create one,
-        // or just fire them off to the router.
+        // 3. Store tasks in synthetic_tasks table
+        const tasksToInsert = generatedTasks.map(task => ({
+            agent_slug_candidate: task.agent_slug || 'unknown',
+            task_type: task.task_type || 'GENERAL',
+            task_spec_json: {
+                type: task.task_type || 'GENERAL',
+                user_id: '00000000-0000-0000-0000-000000000000', // Placeholder, will be set when running
+                stella_handle: '@synthetic.test.network',
+                context: task.input || {},
+                description: task.description
+            },
+            expected_shape: capabilities?.output_schema || {},
+            status: 'PENDING'
+        }))
 
-        // For now, let's just return them to the UI where the user can see them, 
-        // and maybe add a "Run" button? Or just run a batch of them.
+        const { data: insertedTasks, error: insertError } = await supabase
+            .from('synthetic_tasks')
+            .insert(tasksToInsert)
+            .select()
 
-        // The requirement says: "Stores them in a tasks table, Runs routing on them to populate logs"
+        if (insertError) {
+            throw new Error(`Error storing synthetic tasks: ${insertError.message}`)
+        }
 
         return NextResponse.json({
             success: true,
-            count: generatedTasks.length,
-            tasks: generatedTasks.slice(0, 50) // Return sample
+            count: insertedTasks?.length || 0,
+            tasks: insertedTasks || []
         })
 
     } catch (error: any) {
@@ -67,11 +80,14 @@ export async function POST(request: Request) {
 function generateTasksForAgent(agent: any, domain: string, capabilities: any) {
     const tasks = []
     const templates = getTemplatesForDomain(domain)
+    const taskType = agent.domain || 'GENERAL'
 
     for (let i = 0; i < 5; i++) {
         const template = templates[i % templates.length]
         tasks.push({
             agent_id: agent.id,
+            agent_slug: agent.slug,
+            task_type: taskType,
             description: template.replace('{{agent_name}}', agent.name),
             input: {
                 query: template.replace('{{agent_name}}', agent.name),

@@ -527,7 +527,7 @@ Deno.serve(async (req) => {
                                 <h1 className="text-4xl font-bold mb-2">Admin Management</h1>
                                 <p className="text-purple-100">Manage agents and create edge functions</p>
                             </div>
-                            <div className="flex gap-4">
+                            <div className="flex gap-4 flex-wrap">
                                 <Button
                                     onClick={() => {
                                         setShowAgentForm(!showAgentForm)
@@ -557,6 +557,18 @@ Deno.serve(async (req) => {
                                     className="bg-white/20 hover:bg-white/30 backdrop-blur-sm"
                                 >
                                     {showBulkForm ? 'Cancel' : 'Bulk Create'}
+                                </Button>
+                                <Button
+                                    onClick={() => router.push('/validator')}
+                                    className="bg-white/20 hover:bg-white/30 backdrop-blur-sm"
+                                >
+                                    📊 Validator Dashboard
+                                </Button>
+                                <Button
+                                    onClick={() => router.push('/synthetic')}
+                                    className="bg-white/20 hover:bg-white/30 backdrop-blur-sm"
+                                >
+                                    🧪 Synthetic Task Runner
                                 </Button>
                             </div>
                         </div>

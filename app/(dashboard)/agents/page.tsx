@@ -28,30 +28,50 @@ async function getAgents(isAdmin: boolean) {
     return []
   }
 
-  // Get usage stats from agent_usage_logs for each agent
-  // Use admin client to bypass RLS for usage logs
+  // Get ALL usage logs in batched queries to avoid URL/header overflow
+  // With 594 agents, we need to batch the query
   const adminSupabase = createAdminClient()
-  const agentsWithStats = await Promise.all((agents || []).map(async (agent) => {
-    // Query usage logs for this specific agent using admin client
-    const { data: usageLogs, error: logsError } = await adminSupabase
+  const agentIds = (agents || []).map(a => a.id)
+  
+  // Batch in groups of 50 to avoid URL length/header issues
+  let allUsageLogs: any[] = []
+  const BATCH_SIZE = 50
+  
+  for (let i = 0; i < agentIds.length; i += BATCH_SIZE) {
+    const batchIds = agentIds.slice(i, i + BATCH_SIZE)
+    const { data: batchLogs, error: logsError } = await adminSupabase
       .from('agent_usage_logs')
-      .select('success_flag, latency_ms, user_id, task_type')
-      .eq('agent_id', agent.id)
-      .limit(10000) // Get more data for accurate stats
+      .select('agent_id, success_flag, latency_ms')
+      .in('agent_id', batchIds)
+      .limit(1000) // Limit per batch
 
     if (logsError) {
-      console.error(`Error fetching logs for agent ${agent.name} (${agent.id}):`, logsError)
-      console.error('Logs error details:', JSON.stringify(logsError, null, 2))
+      console.error(`Error fetching usage logs batch ${Math.floor(i / BATCH_SIZE)}:`, logsError)
+    } else if (batchLogs) {
+      allUsageLogs = allUsageLogs.concat(batchLogs)
     }
+  }
 
-    const logs = usageLogs || []
+  // Group logs by agent_id for efficient lookup
+  const logsByAgent = new Map<string, typeof allUsageLogs>()
+  for (const log of (allUsageLogs || [])) {
+    if (!log.agent_id) continue
+    if (!logsByAgent.has(log.agent_id)) {
+      logsByAgent.set(log.agent_id, [])
+    }
+    logsByAgent.get(log.agent_id)!.push(log)
+  }
+
+  // Map agents with their stats (no async/await needed now)
+  const agentsWithStats = (agents || []).map((agent) => {
+    const logs = logsByAgent.get(agent.id) || []
     const totalUses = logs.length
     const successfulUses = logs.filter(log => log.success_flag === true).length
     const successRate = totalUses > 0 ? successfulUses / totalUses : 0
     
     const latencies = logs
       .map(log => log.latency_ms)
-      .filter((latency: number | null) => latency != null && latency > 0) as number[]
+      .filter((latency: number | null): latency is number => latency != null && latency > 0)
     const averageLatency = latencies.length > 0
       ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
       : 0
@@ -59,9 +79,6 @@ async function getAgents(isAdmin: boolean) {
     // Extract capabilities from passport_data if available
     const capabilities = agent.agent_capabilities?.[0]
     const passportData = capabilities?.passport_data || {}
-    const trustMetrics = passportData.trust_metrics || {}
-
-    console.log(`Agent ${agent.name}: ${totalUses} uses, ${successRate * 100}% success rate`)
 
     // Get learning metrics from agent_capabilities
     const learningMetrics = {
@@ -86,7 +103,9 @@ async function getAgents(isAdmin: boolean) {
         passport_data: passportData
       }]
     }
-  }))
+  })
+
+  console.log(`Loaded ${agentsWithStats.length} agents with ${allUsageLogs?.length || 0} total usage logs`)
 
   return agentsWithStats
 }

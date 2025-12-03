@@ -175,7 +175,7 @@ export default function LearningCurvesPage() {
                 return (
                   <div
                     key={curve.agent.id}
-                    className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 shadow-lg"
+                    className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 shadow-lg overflow-visible"
                   >
                     {/* Agent Header */}
                     <div className="flex items-center justify-between mb-6">
@@ -223,11 +223,11 @@ export default function LearningCurvesPage() {
 
                     {/* Learning Curve Chart */}
                     {chartData.length > 0 ? (
-                      <div className="mt-6">
+                      <div className="mt-6 overflow-visible">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                           Success Rate Over Time
                         </h3>
-                        <ResponsiveContainer width="100%" height={300}>
+                        <ResponsiveContainer width="100%" height={300} style={{ overflow: 'visible' }}>
                           <AreaChart data={chartData}>
                             <defs>
                               <linearGradient id={`colorBefore-${curve.agent.id}`} x1="0" y1="0" x2="0" y2="1">
@@ -255,12 +255,16 @@ export default function LearningCurvesPage() {
                             />
                             <Tooltip
                               contentStyle={{
-                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                backgroundColor: 'rgba(255, 255, 255, 0.98)',
                                 border: '1px solid #e0e0e0',
                                 borderRadius: '8px',
-                                color: '#333'
+                                color: '#333',
+                                zIndex: 9999,
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
                               }}
+                              wrapperStyle={{ zIndex: 9999 }}
                               labelStyle={{ color: '#333', fontWeight: 'bold' }}
+                              formatter={(value: number, name: string) => [`${value}%`, name]}
                             />
                             <Legend />
                             <Area
@@ -292,11 +296,11 @@ export default function LearningCurvesPage() {
 
                     {/* Reward History */}
                     {chartData.length > 0 && (
-                      <div className="mt-8">
+                      <div className="mt-8 overflow-visible">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                           Reward History
                         </h3>
-                        <ResponsiveContainer width="100%" height={200}>
+                        <ResponsiveContainer width="100%" height={200} style={{ overflow: 'visible' }}>
                           <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" className="dark:stroke-gray-700" />
                             <XAxis
@@ -313,11 +317,14 @@ export default function LearningCurvesPage() {
                             />
                             <Tooltip
                               contentStyle={{
-                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                backgroundColor: 'rgba(255, 255, 255, 0.98)',
                                 border: '1px solid #e0e0e0',
                                 borderRadius: '8px',
-                                color: '#333'
+                                color: '#333',
+                                zIndex: 9999,
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
                               }}
+                              wrapperStyle={{ zIndex: 9999 }}
                             />
                             <Legend />
                             <Line

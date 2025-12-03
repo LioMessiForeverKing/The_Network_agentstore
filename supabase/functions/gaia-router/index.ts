@@ -63,15 +63,27 @@ async function findCandidateAgents(supabase, taskType, isSyntheticTask = false) 
     console.log(`Found ${agents.length} active agents`);
 
     // Query capabilities separately and join manually
+    // Batch the query to avoid URL length limits with many agent IDs
     const agentIds = agents.map(a => a.id);
-    const { data: capabilities, error: capsError } = await supabase
-      .from('agent_capabilities')
-      .select('*')
-      .in('agent_id', agentIds);
+    let capabilities: any[] = [];
+    
+    // Batch in groups of 50 to avoid URL length issues
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < agentIds.length; i += BATCH_SIZE) {
+      const batchIds = agentIds.slice(i, i + BATCH_SIZE);
+      const { data: batchCaps, error: capsError } = await supabase
+        .from('agent_capabilities')
+        .select('*')
+        .in('agent_id', batchIds);
 
-    if (capsError) {
-      console.error('Error fetching capabilities:', capsError);
+      if (capsError) {
+        console.error(`Error fetching capabilities batch ${i / BATCH_SIZE}:`, capsError);
+      } else if (batchCaps) {
+        capabilities = capabilities.concat(batchCaps);
+      }
     }
+    
+    console.log(`Fetched ${capabilities.length} capabilities for ${agentIds.length} agents`);
 
     // Join capabilities to agents
     const agentsWithCaps = agents.map(agent => {
@@ -82,12 +94,8 @@ async function findCandidateAgents(supabase, taskType, isSyntheticTask = false) 
       };
     });
 
-    console.log(`Active agents with capabilities:`, agentsWithCaps.map(a => ({
-      slug: a.slug,
-      status: a.status,
-      has_capabilities: !!a.agent_capabilities?.[0],
-      capabilities_count: a.agent_capabilities?.length || 0
-    })));
+    const agentsWithCapsCount = agentsWithCaps.filter(a => a.agent_capabilities?.length > 0).length;
+    console.log(`Agents with capabilities: ${agentsWithCapsCount}/${agents.length}`);
 
     // Debug: Check Atlas specifically
     const atlasAgent = agentsWithCaps.find(a => a.slug === 'atlas');
@@ -108,26 +116,29 @@ async function findCandidateAgents(supabase, taskType, isSyntheticTask = false) 
     // Filter agents that support this task type
     const candidates = agentsWithCaps.filter(agent => {
       const capabilities = agent.agent_capabilities?.[0];
-      if (!capabilities) {
-        console.log(`Agent ${agent.slug} has no capabilities`);
-        return false;
+      
+      // Try multiple paths to find supported_task_types
+      let supportedTypes: string[] = [];
+      
+      if (capabilities) {
+        const passportData = capabilities.passport_data || {};
+        supportedTypes = passportData.capabilities?.supported_task_types || 
+                        passportData.supported_task_types || [];
       }
       
-      // Prefer agents with recent validations (they're learning)
-      // But don't exclude agents without validations yet
-
-      // Try multiple paths to find supported_task_types
-      const passportData = capabilities.passport_data || {};
-      const supportedTypes = passportData.capabilities?.supported_task_types || 
-                            passportData.supported_task_types || [];
-
-      console.log(`Agent ${agent.slug} supports:`, supportedTypes, `Looking for: ${taskType}`);
+      // Check if task type matches supported types
+      let matches = supportedTypes.includes(taskType);
       
-      const matches = supportedTypes.includes(taskType);
+      // Fallback: If no capabilities or no match, check if domain matches task type
+      // This helps experimental agents work even if capabilities weren't inserted correctly
+      if (!matches && agent.domain === taskType) {
+        console.log(`Agent ${agent.slug} matched by domain fallback: ${agent.domain}`);
+        matches = true;
+      }
       
-      if (!matches && agent.slug === 'atlas') {
-        console.log(`Atlas agent full passport_data:`, JSON.stringify(passportData, null, 2));
-        console.log(`Atlas agent capabilities structure:`, Object.keys(passportData));
+      if (!matches && !capabilities) {
+        // Only log "no capabilities" if we also didn't match by domain
+        console.log(`Agent ${agent.slug} has no capabilities and domain (${agent.domain}) doesn't match ${taskType}`);
       }
 
       return matches;
@@ -174,20 +185,31 @@ async function routeTask(supabase, taskSpec, userPassport) {
   const reasoning = [];
 
   // Check if this is a synthetic task (has stella_handle with 'synthetic' or 'test')
-  const isSyntheticTask = taskSpec.stella_handle?.includes('synthetic') || 
-                          taskSpec.stella_handle?.includes('test') ||
+  const stellaHandle = taskSpec.stella_handle || '';
+  const isSyntheticTask = stellaHandle.includes('synthetic') || 
+                          stellaHandle.includes('test') ||
                           taskSpec.user_id === '89b49bcc-4be4-4d94-aa3e-abdc9367eb60'; // Synthetic user ID
+  
+  console.log(`[Gaia Router] Synthetic detection:`, {
+    stella_handle: stellaHandle,
+    user_id: taskSpec.user_id,
+    includes_synthetic: stellaHandle.includes('synthetic'),
+    includes_test: stellaHandle.includes('test'),
+    is_synthetic_user: taskSpec.user_id === '89b49bcc-4be4-4d94-aa3e-abdc9367eb60',
+    final_is_synthetic: isSyntheticTask
+  });
   
   // Find candidate agents (include EXPERIMENTAL for synthetic tasks)
   const candidates = await findCandidateAgents(supabase, taskSpec.type, isSyntheticTask);
 
   if (candidates.length === 0) {
     // Log for debugging
-    console.log(`No candidates found for task type: ${taskSpec.type}`);
-    const allAgents = await supabase.from('agents').select('slug, status').eq('status', 'ACTIVE');
-    console.log(`Active agents:`, allAgents.data);
+    console.log(`No candidates found for task type: ${taskSpec.type}, isSyntheticTask: ${isSyntheticTask}`);
+    const targetStatus = isSyntheticTask ? 'EXPERIMENTAL' : 'ACTIVE';
+    const allAgents = await supabase.from('agents').select('slug, status').eq('status', targetStatus);
+    console.log(`${targetStatus} agents:`, allAgents.data?.length || 0, 'agents');
     
-    reasoning.push(`No agents found that support this task type: ${taskSpec.type}`);
+    reasoning.push(`No agents found that support this task type: ${taskSpec.type} (synthetic: ${isSyntheticTask})`);
     return [];
   }
 
@@ -885,21 +907,28 @@ Deno.serve(async (req) => {
     const routes = await routeTask(serviceClient, taskSpec, passport);
 
     if (routes.length === 0) {
-      // Additional debugging
-      const allAgentsCheck = await serviceClient.from('agents').select('slug, status').eq('status', 'ACTIVE');
-      console.log('Available agents:', allAgentsCheck.data);
+      // Additional debugging - check if synthetic task
+      const stellaHandle = taskSpec.stella_handle || '';
+      const isSyntheticTask = stellaHandle.includes('synthetic') || 
+                              stellaHandle.includes('test') ||
+                              taskSpec.user_id === '89b49bcc-4be4-4d94-aa3e-abdc9367eb60';
+      
+      const targetStatus = isSyntheticTask ? 'EXPERIMENTAL' : 'ACTIVE';
+      const allAgentsCheck = await serviceClient.from('agents').select('slug, status, domain').eq('status', targetStatus);
+      console.log(`Available ${targetStatus} agents:`, allAgentsCheck.data?.length || 0);
 
-      const atlasCheck = await serviceClient.from('agents')
-        .select(`
-          *,
-          agent_capabilities (
-            passport_data
-          )
-        `)
-        .eq('slug', 'atlas')
-        .single();
+      // Check if any agents support this task type
+      const agentsWithTaskType = await serviceClient
+        .from('agents')
+        .select('slug, domain, agent_capabilities(passport_data)')
+        .eq('status', targetStatus);
+      
+      const matchingAgents = agentsWithTaskType.data?.filter(a => {
+        const supportedTypes = a.agent_capabilities?.[0]?.passport_data?.capabilities?.supported_task_types || [];
+        return supportedTypes.includes(taskSpec.type) || a.domain === taskSpec.type;
+      }) || [];
 
-      console.log('Atlas agent check:', atlasCheck.data);
+      console.log(`Agents matching task type ${taskSpec.type}:`, matchingAgents.map(a => a.slug));
 
       return new Response(JSON.stringify({
         success: false,
@@ -907,9 +936,12 @@ Deno.serve(async (req) => {
         error: `No suitable agent found for this task type: ${taskSpec.type}`,
         debug: {
           task_type: taskSpec.type,
-          available_agents: allAgentsCheck.data?.map(a => a.slug) || [],
-          atlas_exists: !!atlasCheck.data,
-          atlas_has_capabilities: !!atlasCheck.data?.agent_capabilities?.[0]
+          is_synthetic: isSyntheticTask,
+          target_status: targetStatus,
+          stella_handle: stellaHandle,
+          total_agents_with_status: allAgentsCheck.data?.length || 0,
+          agents_matching_task_type: matchingAgents.map(a => a.slug),
+          sample_agents: allAgentsCheck.data?.slice(0, 10).map(a => ({ slug: a.slug, domain: a.domain })) || []
         }
       }), {
         status: 404,

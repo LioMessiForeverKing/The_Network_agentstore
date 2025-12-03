@@ -570,6 +570,12 @@ Deno.serve(async (req) => {
                                 >
                                     🧪 Synthetic Task Runner
                                 </Button>
+                                <Button
+                                    onClick={() => router.push('/learning')}
+                                    className="bg-white/20 hover:bg-white/30 backdrop-blur-sm"
+                                >
+                                    📈 Learning Curves
+                                </Button>
                             </div>
                         </div>
                     </div>

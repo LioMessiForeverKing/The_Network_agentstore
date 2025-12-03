@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS public.synthetic_tasks (
   status TEXT CHECK (status IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED')) DEFAULT 'PENDING',
   usage_log_id UUID REFERENCES public.agent_usage_logs(id),
   validation_event_id UUID REFERENCES public.agent_validation_events(id),
+  error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   completed_at TIMESTAMPTZ
 );

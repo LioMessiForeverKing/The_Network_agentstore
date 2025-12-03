@@ -195,6 +195,14 @@ Deno.serve(async (req) => {
       rubric
     } = body;
 
+    console.log('[Validator] Request received:', {
+      has_original_task_spec: !!original_task_spec,
+      has_agent_output: !!agent_output,
+      agent_slug,
+      usage_log_id,
+      body_keys: Object.keys(body)
+    });
+
     // Validate required fields
     if (!original_task_spec || !agent_output || !agent_slug) {
       return new Response(JSON.stringify({
@@ -239,33 +247,95 @@ Deno.serve(async (req) => {
     );
 
     // Store validation event if usage_log_id is provided
+    let storageSuccess = false;
+    let storageError: any = null;
+    
     if (usage_log_id) {
       try {
-        const { error: insertError } = await serviceClient
-          .from('agent_validation_events')
-          .insert({
+        console.log(`[Validator] Storing validation event for usage_log_id: ${usage_log_id}`);
+        console.log(`[Validator] Validation result:`, {
+          score: validationResult.score,
+          label: validationResult.label,
+          error_type: validationResult.error_type,
+          validator_agent_id: validatorAgent.id
+        });
+        
+        // Verify usage_log_id exists
+        const { data: usageLogCheck, error: usageLogError } = await serviceClient
+          .from('agent_usage_logs')
+          .select('id, agent_id')
+          .eq('id', usage_log_id)
+          .single();
+        
+        if (usageLogError || !usageLogCheck) {
+          console.error('[Validator] Usage log not found:', {
             usage_log_id,
-            validator_agent_id: validatorAgent.id,
-            score: validationResult.score,
-            label: validationResult.label,
-            error_type: validationResult.error_type,
-            explanation: validationResult.explanation,
-            is_human: false
+            error: usageLogError,
+            message: 'Cannot store validation event without valid usage_log_id'
           });
+          storageError = { type: 'usage_log_not_found', error: usageLogError };
+        } else {
+          console.log('[Validator] Usage log verified:', {
+            usage_log_id: usageLogCheck.id,
+            agent_id: usageLogCheck.agent_id
+          });
+          
+          const { data: validationEvent, error: insertError } = await serviceClient
+            .from('agent_validation_events')
+            .insert({
+              usage_log_id,
+              validator_agent_id: validatorAgent.id,
+              score: validationResult.score,
+              label: validationResult.label,
+              error_type: validationResult.error_type,
+              explanation: validationResult.explanation,
+              is_human: false
+            })
+            .select('id, usage_log_id, created_at, score, label')
+            .single();
 
-        if (insertError) {
-          console.error('Error storing validation event:', insertError);
-          // Don't fail the request, just log the error
+          if (insertError) {
+            console.error('[Validator] ❌ Error storing validation event:', insertError);
+            console.error('[Validator] Insert error details:', JSON.stringify(insertError, null, 2));
+            console.error('[Validator] Insert payload was:', {
+              usage_log_id,
+              validator_agent_id: validatorAgent.id,
+              score: validationResult.score,
+              label: validationResult.label,
+              error_type: validationResult.error_type
+            });
+            storageError = { type: 'insert_error', error: insertError };
+          } else {
+            console.log(`[Validator] ✅ Validation event stored successfully:`, {
+              id: validationEvent.id,
+              usage_log_id: validationEvent.usage_log_id,
+              score: validationEvent.score,
+              label: validationEvent.label,
+              created_at: validationEvent.created_at
+            });
+            console.log(`[Validator] Learning system will update agent capabilities automatically via trigger`);
+            storageSuccess = true;
+          }
         }
       } catch (error) {
-        console.error('Error storing validation event:', error);
-        // Don't fail the request
+        console.error('[Validator] Exception storing validation event:', error);
+        console.error('[Validator] Exception details:', error instanceof Error ? error.stack : String(error));
+        storageError = { type: 'exception', error: error instanceof Error ? error.message : String(error) };
       }
+    } else {
+      console.warn('[Validator] No usage_log_id provided, skipping validation event storage');
     }
 
+    // Return response with validation result
+    // Include storage status so caller knows if it was stored
     return new Response(JSON.stringify({
       success: true,
-      validation: validationResult
+      validation: validationResult,
+      storage: {
+        attempted: !!usage_log_id,
+        success: storageSuccess,
+        error: storageError
+      }
     }), {
       status: 200,
       headers: {
@@ -274,10 +344,12 @@ Deno.serve(async (req) => {
       }
     });
   } catch (error: any) {
-    console.error('Error in validator agent:', error);
+    console.error('[Validator] Error in validator agent:', error);
+    console.error('[Validator] Error stack:', error instanceof Error ? error.stack : String(error));
     return new Response(JSON.stringify({
       success: false,
-      error: error.message || 'Internal server error'
+      error: error.message || 'Internal server error',
+      details: error instanceof Error ? error.stack : String(error)
     }), {
       status: 500,
       headers: {

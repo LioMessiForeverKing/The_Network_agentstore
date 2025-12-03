@@ -67,8 +67,12 @@ export async function GET(request: Request) {
         const { data: validations, error } = await query
 
         if (error) {
+            console.error('[Validations API] Error fetching validations:', error);
+            console.error('[Validations API] Error details:', JSON.stringify(error, null, 2));
             throw new Error(`Error fetching validations: ${error.message}`)
         }
+
+        console.log(`[Validations API] Fetched ${validations?.length || 0} validation events`);
 
         return NextResponse.json({
             success: true,

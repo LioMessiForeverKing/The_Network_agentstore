@@ -63,10 +63,23 @@ async function getAgents(isAdmin: boolean) {
 
     console.log(`Agent ${agent.name}: ${totalUses} uses, ${successRate * 100}% success rate`)
 
+    // Get learning metrics from agent_capabilities
+    const learningMetrics = {
+      success_rate: capabilities?.success_rate ?? successRate,
+      recent_success_rate: capabilities?.recent_success_rate ?? null,
+      validation_count: capabilities?.validation_count ?? 0,
+      trend: capabilities?.trend ?? null,
+      last_validation_at: capabilities?.last_validation_at ?? null
+    }
+
     return {
       ...agent,
       agent_capabilities: [{
-        success_rate: successRate,
+        success_rate: learningMetrics.success_rate,
+        recent_success_rate: learningMetrics.recent_success_rate,
+        validation_count: learningMetrics.validation_count,
+        trend: learningMetrics.trend,
+        last_validation_at: learningMetrics.last_validation_at,
         average_latency_ms: averageLatency,
         total_uses: totalUses,
         // Also include passport_data for reference

@@ -1,0 +1,22 @@
+{
+  "name": "Agent Name",
+  "slug": "agent-slug",
+  "description": "Agent description",
+  "domain": "DOMAIN_NAME",
+  "status": "EXPERIMENTAL",
+  "invocation_type": "INTERNAL_FUNCTION",
+  "invocation_config": {
+    "function_name": "agent-function-name",
+    "endpoint": "/functions/v1/agent-function-name",
+    "method": "POST"
+  },
+  "type": "tool",
+  "supported_task_types": ["TASK_TYPE_1", "TASK_TYPE_2"],
+  "input_schema": {},
+  "output_schema": {},
+  "risk_level": "low",
+  "cost_level": "cheap",
+  "latency_target_ms": 500,
+  "input_format": "standard"
+}
+

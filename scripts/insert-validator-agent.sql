@@ -24,7 +24,6 @@ ON CONFLICT (slug) DO UPDATE SET
 -- Insert capabilities (get the agent_id first)
 INSERT INTO agent_capabilities (
   agent_id,
-  supported_task_types,
   passport_data,
   success_rate,
   average_latency_ms,
@@ -32,7 +31,6 @@ INSERT INTO agent_capabilities (
 )
 SELECT 
   id,
-  ARRAY['VALIDATION'],
   '{
     "type": "validator",
     "capabilities": {
@@ -64,7 +62,6 @@ SELECT
   0
 FROM agents WHERE slug = 'validator'
 ON CONFLICT (agent_id) DO UPDATE SET
-  supported_task_types = EXCLUDED.supported_task_types,
   passport_data = EXCLUDED.passport_data,
   last_updated = NOW();
 

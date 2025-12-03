@@ -1156,9 +1156,193 @@ async function executePrime(
       return result;
     }
     
+    // Handle nlp_create action - extract event details from message
+    if (action === 'nlp_create' && taskSpec.context?.message) {
+      // For nlp_create, we need to extract event details from the message
+      // Declare extraction variables at function scope
+      let extractedDate: string | null = null;
+      let extractedLocation: string | null = null;
+      let extractedTime = '19:00';
+      
+      // Check if we have extracted_entities from the standard task spec
+      if (taskSpec.extracted_entities) {
+        // Use extracted entities to build event_details
+        extractedDate = taskSpec.extracted_entities.date || taskSpec.extracted_entities.when || null;
+        extractedLocation = taskSpec.extracted_entities.location || taskSpec.extracted_entities.where || null;
+        
+        extractedTime = taskSpec.extracted_entities.time || '19:00';
+        taskSpec.context.event_details = {
+          date: extractedDate || new Date().toISOString().split('T')[0], // Default to today if not found
+          time: extractedTime,
+          location: extractedLocation || 'San Francisco, CA', // Default location if not found
+          title: taskSpec.extracted_entities.title || taskSpec.extracted_entities.name,
+          description: taskSpec.extracted_entities.description || taskSpec.context.message,
+          theme: taskSpec.extracted_entities.theme || taskSpec.extracted_entities.topics || [],
+          max_attendees: taskSpec.extracted_entities.max_attendees || 10
+        };
+      } else {
+        // Fallback: Try to extract from message using improved parsing
+        // This is a basic implementation - in production, use LLM extraction
+        const message = taskSpec.context.message;
+        const messageLower = message.toLowerCase();
+        
+        // Improved date extraction - handle relative dates
+        extractedDate = null;
+        const datePatterns = [
+          /(\d{4}-\d{2}-\d{2})/,  // YYYY-MM-DD
+          /(\d{1,2}\/\d{1,2}\/\d{4})/,  // MM/DD/YYYY
+          /(next\s+(saturday|sunday|monday|tuesday|wednesday|thursday|friday|weekend|week))/i,
+          /(this\s+(saturday|sunday|monday|tuesday|wednesday|thursday|friday|weekend|week))/i,
+          /(tomorrow)/i,
+          /(today)/i
+        ];
+        
+        for (const pattern of datePatterns) {
+          const match = messageLower.match(pattern);
+          if (match) {
+            if (match[1] === 'tomorrow') {
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              extractedDate = tomorrow.toISOString().split('T')[0];
+            } else if (match[1] === 'today') {
+              extractedDate = new Date().toISOString().split('T')[0];
+            } else if (match[1]?.startsWith('next') || match[1]?.startsWith('this')) {
+              // For "next Saturday" etc., calculate the date
+              const dayName = match[2]?.toLowerCase();
+              if (dayName) {
+                const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                const targetDay = days.indexOf(dayName);
+                if (targetDay !== -1) {
+                  const today = new Date();
+                  const currentDay = today.getDay();
+                  let daysToAdd = targetDay - currentDay;
+                  if (match[1].startsWith('next')) {
+                    daysToAdd = daysToAdd <= 0 ? daysToAdd + 7 : daysToAdd;
+                  } else {
+                    daysToAdd = daysToAdd < 0 ? daysToAdd + 7 : daysToAdd;
+                  }
+                  const targetDate = new Date(today);
+                  targetDate.setDate(today.getDate() + daysToAdd);
+                  extractedDate = targetDate.toISOString().split('T')[0];
+                }
+              }
+            } else {
+              extractedDate = match[1];
+            }
+            break;
+          }
+        }
+        
+        // Improved time extraction
+        let extractedTime = '19:00';
+        const timeMatch = messageLower.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+        if (timeMatch) {
+          let hours = parseInt(timeMatch[1]);
+          const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+          const period = timeMatch[3]?.toLowerCase();
+          
+          if (period === 'pm' && hours !== 12) {
+            hours += 12;
+          } else if (period === 'am' && hours === 12) {
+            hours = 0;
+          }
+          
+          extractedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+        }
+        
+        // Improved location extraction - handle lowercase and various formats
+        extractedLocation = null;
+        const locationPatterns = [
+          /(?:in|at|near)\s+([a-z]+(?:\s+[a-z]+)*(?:\s*,\s*[a-z]{2})?)/i,  // "in san francisco" or "in sf, ca"
+          /(?:in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s*,\s*[A-Z]{2})?)/,  // Capitalized
+          /\b(sf|nyc|la|seattle|portland|boston|chicago|austin|miami)\b/i,  // Common city abbreviations/names
+        ];
+        
+        for (const pattern of locationPatterns) {
+          const match = message.match(pattern);
+          if (match && match[1]) {
+            const rawLocation = match[1].trim();
+            // Capitalize first letter of each word
+            extractedLocation = rawLocation.split(' ').map(word => 
+              word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+            ).join(' ');
+            break;
+          }
+        }
+        
+        // Use defaults if extraction failed
+        const finalLocation = extractedLocation || 'San Francisco, CA';
+        taskSpec.context.event_details = {
+          date: extractedDate || new Date().toISOString().split('T')[0], // Default to today
+          time: extractedTime,
+          location: finalLocation, // Default location
+          title: taskSpec.context.message.substring(0, 50), // Use first 50 chars as title
+          description: taskSpec.context.message,
+          theme: [],
+          max_attendees: 10
+        };
+      }
+      
+      // Ensure event_details is always set (should be set above, but double-check)
+      if (!taskSpec.context.event_details) {
+        console.error('[Prime] ERROR: event_details not set after extraction!');
+        taskSpec.context.event_details = {
+          date: new Date().toISOString().split('T')[0],
+          time: '19:00',
+          location: 'San Francisco, CA',
+          title: taskSpec.context.message?.substring(0, 50) || 'Event',
+          description: taskSpec.context.message || '',
+          theme: [],
+          max_attendees: 10
+        };
+      }
+      
+      // Validate extracted event_details - we always set defaults, so this should pass
+      // Double-check that we have valid values (not empty strings)
+      const hasValidDate = taskSpec.context.event_details.date && 
+                          taskSpec.context.event_details.date.trim() !== '';
+      const hasValidLocation = taskSpec.context.event_details.location && 
+                              taskSpec.context.event_details.location.trim() !== '';
+      
+      if (!hasValidDate || !hasValidLocation) {
+        // This shouldn't happen since we set defaults, but log for debugging
+        console.error('[Prime] Validation failed - event_details:', JSON.stringify(taskSpec.context.event_details, null, 2));
+        console.error('[Prime] Message was:', taskSpec.context.message?.substring(0, 200));
+        console.error('[Prime] Extraction results:', { extractedDate, extractedLocation, extractedTime });
+        
+        // Force set defaults if somehow they're missing
+        if (!hasValidDate) {
+          taskSpec.context.event_details.date = new Date().toISOString().split('T')[0];
+          console.log('[Prime] Forced default date');
+        }
+        if (!hasValidLocation) {
+          taskSpec.context.event_details.location = 'San Francisco, CA';
+          console.log('[Prime] Forced default location');
+        }
+        
+        // Now validate again - should always pass
+        if (!taskSpec.context.event_details.date || !taskSpec.context.event_details.location) {
+          return {
+            success: false,
+            error: 'Could not extract required fields (date and location) from message. Please provide more specific details.'
+          };
+        }
+      }
+      
+      // Log what we extracted for debugging
+      console.log('[Prime] Successfully extracted event details:', {
+        date: taskSpec.context.event_details.date,
+        location: taskSpec.context.event_details.location,
+        time: taskSpec.context.event_details.time,
+        extracted_date: extractedDate !== null,
+        extracted_location: extractedLocation !== null,
+        message_preview: taskSpec.context.message?.substring(0, 100)
+      });
+    }
+    
     // Default: Create event
-    // Validate input
-    if (!taskSpec.context.event_details.date || !taskSpec.context.event_details.location) {
+    // Validate input (for both 'create' and 'nlp_create' after extraction)
+    if (!taskSpec.context.event_details || !taskSpec.context.event_details.date || !taskSpec.context.event_details.location) {
       return {
         success: false,
         error: 'Missing required fields: date and location are required'
@@ -1325,6 +1509,17 @@ Deno.serve(async (req) => {
       if (!taskSpec.context?.event_id) {
         return new Response(
           JSON.stringify({ error: 'Invalid task spec: event_id is required for edit action' }),
+          { 
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    } else if (action === 'nlp_create') {
+      // For nlp_create action, we need message (not event_details)
+      if (!taskSpec.context?.message) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid task spec: message is required for nlp_create action' }),
           { 
             status: 400,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }

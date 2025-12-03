@@ -11,6 +11,9 @@ interface AgentCardProps {
     status: string
     agent_capabilities?: Array<{
       success_rate: number
+      recent_success_rate?: number | null
+      validation_count?: number
+      trend?: 'IMPROVING' | 'STABLE' | 'DECLINING' | null
       average_latency_ms: number
       total_uses: number
       passport_data?: {
@@ -25,6 +28,11 @@ interface AgentCardProps {
 export default function AgentCard({ agent }: AgentCardProps) {
   const capabilities = agent.agent_capabilities?.[0]
   const successRate = capabilities ? Math.round((capabilities.success_rate || 0) * 100) : 0
+  const recentSuccessRate = capabilities?.recent_success_rate 
+    ? Math.round(capabilities.recent_success_rate * 100) 
+    : null
+  const validationCount = capabilities?.validation_count || 0
+  const trend = capabilities?.trend
   
   // Get task type from capabilities or fallback to domain
   const taskType = capabilities?.passport_data?.capabilities?.supported_task_types?.[0] || agent.domain
@@ -79,17 +87,43 @@ export default function AgentCard({ agent }: AgentCardProps) {
               {/* Success Rate Progress Bar */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Success Rate</span>
-                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                    {successRate}%
+                  <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                    {recentSuccessRate !== null ? 'Recent Success' : 'Success Rate'}
                   </span>
+                  <div className="flex items-center gap-2">
+                    {trend === 'IMPROVING' && (
+                      <span className="text-xs text-green-600 dark:text-green-400">↑</span>
+                    )}
+                    {trend === 'DECLINING' && (
+                      <span className="text-xs text-red-600 dark:text-red-400">↓</span>
+                    )}
+                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                      {recentSuccessRate !== null ? recentSuccessRate : successRate}%
+                    </span>
+                    {validationCount > 0 && (
+                      <span className="text-xs text-gray-500 dark:text-gray-500">
+                        ({validationCount} validations)
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-1000 ease-out"
-                    style={{ width: `${successRate}%` }}
+                    className={`h-full rounded-full transition-all duration-1000 ease-out ${
+                      trend === 'IMPROVING' 
+                        ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                        : trend === 'DECLINING'
+                        ? 'bg-gradient-to-r from-red-500 to-orange-500'
+                        : 'bg-gradient-to-r from-emerald-500 to-teal-500'
+                    }`}
+                    style={{ width: `${recentSuccessRate !== null ? recentSuccessRate : successRate}%` }}
                   ></div>
                 </div>
+                {recentSuccessRate !== null && recentSuccessRate !== successRate && (
+                  <div className="mt-1 text-xs text-gray-500 dark:text-gray-500">
+                    Overall: {successRate}%
+                  </div>
+                )}
               </div>
 
               {/* Additional Stats */}

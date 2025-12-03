@@ -16,13 +16,20 @@ interface SyntheticTask {
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
   usage_log_id?: string
   validation_event_id?: string
+  error_message?: string
   created_at: string
   completed_at?: string
   agent_usage_logs?: {
     id: string
     task_type: string
+    task_description?: string
     success_flag: boolean
     latency_ms: number
+    input_json?: any
+    output_json?: any
+    routing_metadata?: any
+    full_context_json?: any
+    error_message?: string
     created_at: string
   }
   agent_validation_events?: {
@@ -30,6 +37,7 @@ interface SyntheticTask {
     score: number
     label: string
     error_type: string
+    explanation?: string
     created_at: string
   }
 }
@@ -41,6 +49,7 @@ export default function SyntheticPage() {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [filters, setFilters] = useState({
     status: '',
     agent_slug: ''
@@ -89,7 +98,11 @@ export default function SyntheticPage() {
 
       if (response.ok) {
         const data = await response.json()
-        alert(`Successfully generated ${data.count} synthetic tasks!`)
+        if (data.count === 0) {
+          alert(data.message || 'No synthetic tasks generated. Make sure you have EXPERIMENTAL agents (synthetic tasks only test experimental agents, not ACTIVE ones).')
+        } else {
+          alert(`Successfully generated ${data.count} synthetic tasks for EXPERIMENTAL agents!`)
+        }
         fetchTasks()
       } else {
         const error = await response.json()
@@ -334,11 +347,23 @@ export default function SyntheticPage() {
                           </Badge>
                         </div>
                       )}
+                      {task.status === 'FAILED' && task.error_message && (
+                        <div className="mt-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                          <p className="text-sm font-semibold text-red-800 dark:text-red-200 mb-1">Error:</p>
+                          <p className="text-sm text-red-700 dark:text-red-300">{task.error_message}</p>
+                        </div>
+                      )}
                       <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
                         Created: {new Date(task.created_at).toLocaleString()}
                       </p>
                     </div>
                     <div className="flex gap-2">
+                      <Button
+                        onClick={() => setExpandedId(expandedId === task.id ? null : task.id)}
+                        className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600"
+                      >
+                        {expandedId === task.id ? 'Collapse' : 'View Details'}
+                      </Button>
                       {task.status === 'PENDING' && (
                         <Button
                           onClick={() => handleRunTasks([task.id])}
@@ -358,6 +383,169 @@ export default function SyntheticPage() {
                       )}
                     </div>
                   </div>
+
+                  {/* Expanded Details */}
+                  {expandedId === task.id && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-4">
+                      {/* Generated Task Spec */}
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                          Generated Task Spec (Stored)
+                          {task.task_spec_json?.user_id === '00000000-0000-0000-0000-000000000000' && (
+                            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                              (user_id placeholder - updated when running)
+                            </span>
+                          )}
+                        </h4>
+                        <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto text-xs">
+                          {JSON.stringify(task.task_spec_json, null, 2)}
+                        </pre>
+                      </div>
+
+                      {/* Gaia Router Response */}
+                      {task.agent_usage_logs?.routing_metadata && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            Gaia Router Response
+                          </h4>
+                          <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto text-xs">
+                            {JSON.stringify(task.agent_usage_logs.routing_metadata, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Transformation Details */}
+                      {task.agent_usage_logs?.routing_metadata?.transformation && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            🔄 Task Spec Transformation
+                          </h4>
+                          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+                            <div className="space-y-3 text-sm">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">Input Format:</span>
+                                <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/50 rounded text-xs font-mono">
+                                  {task.agent_usage_logs.routing_metadata.transformation.agent_input_format || 'standard'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">Transformation Applied:</span>
+                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                  task.agent_usage_logs.routing_metadata.transformation.transformation_applied
+                                    ? 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-200'
+                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                                }`}>
+                                  {task.agent_usage_logs.routing_metadata.transformation.transformation_applied ? 'Yes' : 'No'}
+                                </span>
+                              </div>
+                              {task.agent_usage_logs.routing_metadata.transformation.transformation_type && (
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium">Transformation Type:</span>
+                                  <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/50 rounded text-xs font-mono">
+                                    {task.agent_usage_logs.routing_metadata.transformation.transformation_type}
+                                  </span>
+                                </div>
+                              )}
+                              {task.agent_usage_logs.routing_metadata.transformation.reason && (
+                                <div>
+                                  <span className="font-medium">Reason:</span>
+                                  <p className="mt-1 text-gray-600 dark:text-gray-400 text-xs">
+                                    {task.agent_usage_logs.routing_metadata.transformation.reason}
+                                  </p>
+                                </div>
+                              )}
+                              <details className="mt-2">
+                                <summary className="cursor-pointer text-xs font-medium text-blue-700 dark:text-blue-300 hover:underline">
+                                  View Full Transformation Details
+                                </summary>
+                                <pre className="mt-2 bg-blue-100 dark:bg-blue-900/30 p-3 rounded text-xs overflow-x-auto">
+                                  {JSON.stringify(task.agent_usage_logs.routing_metadata.transformation, null, 2)}
+                                </pre>
+                              </details>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Agent Input */}
+                      {task.agent_usage_logs?.input_json && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            Agent Input
+                          </h4>
+                          <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto text-xs">
+                            {JSON.stringify(task.agent_usage_logs.input_json, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Agent Output/Execution Result */}
+                      {task.agent_usage_logs?.output_json && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            Agent Execution Result
+                          </h4>
+                          <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto text-xs">
+                            {JSON.stringify(task.agent_usage_logs.output_json, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Full Context */}
+                      {task.agent_usage_logs?.full_context_json && Object.keys(task.agent_usage_logs.full_context_json).length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            Full Context
+                          </h4>
+                          <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto text-xs">
+                            {JSON.stringify(task.agent_usage_logs.full_context_json, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Validation Details */}
+                      {task.agent_validation_events && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            Validation Details
+                          </h4>
+                          <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
+                            <div className="space-y-2 text-sm">
+                              <div>
+                                <span className="font-medium">Score:</span> {(task.agent_validation_events.score * 100).toFixed(1)}%
+                              </div>
+                              <div>
+                                <span className="font-medium">Label:</span> {task.agent_validation_events.label}
+                              </div>
+                              <div>
+                                <span className="font-medium">Error Type:</span> {task.agent_validation_events.error_type}
+                              </div>
+                              {task.agent_validation_events.explanation && (
+                                <div>
+                                  <span className="font-medium">Explanation:</span>
+                                  <p className="mt-1 text-gray-600 dark:text-gray-400">{task.agent_validation_events.explanation}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Error Details */}
+                      {(task.error_message || task.agent_usage_logs?.error_message) && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-red-700 dark:text-red-300 mb-2">
+                            Error Details
+                          </h4>
+                          <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg border border-red-200 dark:border-red-800">
+                            <p className="text-sm text-red-700 dark:text-red-300">
+                              {task.error_message || task.agent_usage_logs?.error_message}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

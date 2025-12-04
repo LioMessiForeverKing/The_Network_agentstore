@@ -144,30 +144,78 @@ async function findCandidateAgents(supabase, taskType, isSyntheticTask = false) 
       return matches;
     });
 
-    // Sort by learning-enhanced metrics
-    // Priority: recent_success_rate > success_rate > validation_count (confidence) > latency
-    candidates.sort((a, b) => {
-      const aCap = a.agent_capabilities?.[0];
-      const bCap = b.agent_capabilities?.[0];
+    // Sort by AgentRank v0 score
+    // Formula: score = 0.30 * SRr + 0.20 * SRg + 0.20 * V + 0.15 * L + 0.10 * D - 0.05 * N
+    candidates.forEach(agent => {
+      const caps = agent.agent_capabilities?.[0] || {};
+      const passportData = caps.passport_data || {};
       
-      // Use recent_success_rate if available (more responsive to learning)
-      const aRate = aCap?.recent_success_rate ?? aCap?.success_rate ?? 0.5;
-      const bRate = bCap?.recent_success_rate ?? bCap?.success_rate ?? 0.5;
+      // SRr: Recent Success Rate (default 0.5 if unknown)
+      const SRr = caps.recent_success_rate !== undefined ? caps.recent_success_rate : 0.5;
       
-      // If rates are close, prefer agents with more validations (higher confidence)
-      if (Math.abs(aRate - bRate) < 0.05) {
-        const aConfidence = aCap?.validation_count ?? 0;
-        const bConfidence = bCap?.validation_count ?? 0;
-        if (aConfidence !== bConfidence) {
-          return bConfidence - aConfidence;
+      // SRg: Global Success Rate (default 0.5)
+      const SRg = caps.success_rate !== undefined ? caps.success_rate : 0.5;
+      
+      // V: Average Validator Score (default to success_rate if not explicitly tracked separately)
+      // If passport_data.metrics.average_validator_score exists, use it.
+      const V = passportData.metrics?.average_validator_score !== undefined 
+        ? passportData.metrics.average_validator_score 
+        : SRg; 
+      
+      // L: Normalized Latency (0-1, higher is better)
+      // Map 0ms -> 1.0, 5000ms+ -> 0.0
+      const latency = caps.average_latency_ms || 1000;
+      const L = Math.max(0, 1 - (latency / 5000));
+      
+      // D: Domain Alignment (1 if match, 0 if not)
+      const D = agent.domain === taskType ? 1 : 0;
+      
+      // N: Newness Penalty (1 if < 50 uses, 0 otherwise)
+      const totalUses = caps.validation_count || caps.total_uses || 0;
+      const N = totalUses < 50 ? 1 : 0;
+      
+      // Calculate final score
+      const score = (0.30 * SRr) + 
+                    (0.20 * SRg) + 
+                    (0.20 * V) + 
+                    (0.15 * L) + 
+                    (0.10 * D) - 
+                    (0.05 * N);
+      
+      // Attach score components to agent for debugging/logging
+      agent.ranking_debug = {
+        score,
+        components: { SRr, SRg, V, L, D, N },
+        raw: {
+          recent_success: caps.recent_success_rate,
+          global_success: caps.success_rate,
+          latency: caps.average_latency_ms,
+          uses: totalUses,
+          domain: agent.domain
         }
-        // If confidence is same, prefer lower latency
-        const aLatency = aCap?.average_latency_ms || 1000;
-        const bLatency = bCap?.average_latency_ms || 1000;
-        return aLatency - bLatency;
+      };
+    });
+
+    // Sort descending by score
+    candidates.sort((a, b) => {
+      const scoreA = a.ranking_debug?.score || 0;
+      const scoreB = b.ranking_debug?.score || 0;
+      
+      if (Math.abs(scoreA - scoreB) > 0.001) {
+        return scoreB - scoreA;
       }
       
-      return bRate - aRate;
+      // Tie-breakers
+      
+      // 1. Prefer higher validation count (confidence)
+      const countA = a.agent_capabilities?.[0]?.validation_count || 0;
+      const countB = b.agent_capabilities?.[0]?.validation_count || 0;
+      if (countA !== countB) return countB - countA;
+      
+      // 2. Prefer lower latency
+      const latA = a.agent_capabilities?.[0]?.average_latency_ms || 0;
+      const latB = b.agent_capabilities?.[0]?.average_latency_ms || 0;
+      return latA - latB;
     });
 
     return candidates;
@@ -217,8 +265,14 @@ async function routeTask(supabase, taskSpec, userPassport) {
   const primaryAgent = candidates[0];
   const primaryCapabilities = primaryAgent.agent_capabilities?.[0];
 
+  const score = primaryAgent.ranking_debug?.score ?? 0;
   reasoning.push(`Found ${candidates.length} candidate agent(s)`);
-  reasoning.push(`Selected ${primaryAgent.name} as primary agent (success rate: ${((primaryCapabilities?.success_rate || 0) * 100).toFixed(1)}%)`);
+  reasoning.push(`Selected ${primaryAgent.name} as primary agent (AgentRank v0 Score: ${score.toFixed(4)})`);
+  
+  if (primaryAgent.ranking_debug && primaryAgent.ranking_debug.components) {
+    const c = primaryAgent.ranking_debug.components;
+    reasoning.push(`Score breakdown: 0.3*SRr(${(c.SRr ?? 0).toFixed(2)}) + 0.2*SRg(${(c.SRg ?? 0).toFixed(2)}) + 0.2*V(${(c.V ?? 0).toFixed(2)}) + 0.15*L(${(c.L ?? 0).toFixed(2)}) + 0.1*D(${c.D ?? 0}) - 0.05*N(${c.N ?? 0})`);
+  }
 
   // Check constraints
   const constraints = primaryCapabilities?.passport_data?.constraints || {};
